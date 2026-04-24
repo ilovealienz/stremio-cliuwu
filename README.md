@@ -1,6 +1,6 @@
 # stremio-cliuwu
 
-Disclaimer: MADE WITH CLAUDE FOR LINUX, IT KINDA WORKS ON WINDOWS. I'll try fix it at some point to get ipc to work
+Disclaimer: MADE WITH CLAUDE FOR LINUX, IT KINDA WORKS ON WINDOWS. I'll try fix it at some point to get ipc to work for windows
 
 A terminal interface for Stremio. browse, search, and stream movies, shows, and anime via mpv.
 
