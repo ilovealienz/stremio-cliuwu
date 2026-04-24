@@ -98,9 +98,15 @@ func FmtStream(s Stream) string {
 		filename  = strings.Join(strings.Fields(leftover), " ")
 	}
 	if filename != "" {
+		// Leave room for the addon tag, resolution, source, size and padding
+		// roughly 40 chars of fixed content, rest goes to filename
+		maxFilename := tw() - 42
+		if maxFilename < 20 {
+			maxFilename = 20
+		}
 		runes := []rune(filename)
-		if len(runes) > 55 {
-			filename = string(runes[:55]) + "…"
+		if len(runes) > maxFilename {
+			filename = string(runes[:maxFilename]) + "…"
 		}
 		parts = append(parts, bold(filename))
 	}
