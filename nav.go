@@ -282,24 +282,38 @@ func streamScreen(addons []Addon, cfg AppConfig, mediaType, videoID string, m Me
 			continue
 		case "[":
 			if hasPrev {
+				ep := ctx.Episodes[ctx.Index-1]
+				AddHistory(HistoryEntry{
+					Name: ctx.Show.Name, ID: ctx.Show.ID, Type: ctx.Show.Type,
+					Source: ctx.Show.Source, Year: ctx.Show.Year,
+					Season: ctx.Season, Episode: ep.Episode,
+					VideoID: ep.ID, EpTitle: ep.Title,
+				}, cfg.HistoryMax)
 				newCtx := &EpCtx{
 					Show:     ctx.Show,
 					Season:   ctx.Season,
 					Episodes: ctx.Episodes,
 					Index:    ctx.Index - 1,
 				}
-				return streamScreen(addons, cfg, "series", ctx.Episodes[ctx.Index-1].ID, m, newCtx)
+				return streamScreen(addons, cfg, "series", ep.ID, m, newCtx)
 			}
 			continue
 		case "]":
 			if hasNext {
+				ep := ctx.Episodes[ctx.Index+1]
+				AddHistory(HistoryEntry{
+					Name: ctx.Show.Name, ID: ctx.Show.ID, Type: ctx.Show.Type,
+					Source: ctx.Show.Source, Year: ctx.Show.Year,
+					Season: ctx.Season, Episode: ep.Episode,
+					VideoID: ep.ID, EpTitle: ep.Title,
+				}, cfg.HistoryMax)
 				newCtx := &EpCtx{
 					Show:     ctx.Show,
 					Season:   ctx.Season,
 					Episodes: ctx.Episodes,
 					Index:    ctx.Index + 1,
 				}
-				return streamScreen(addons, cfg, "series", ctx.Episodes[ctx.Index+1].ID, m, newCtx)
+				return streamScreen(addons, cfg, "series", ep.ID, m, newCtx)
 			} else if ctx != nil {
 				// Last episode of season
 				header("streams")
@@ -323,6 +337,9 @@ func streamScreen(addons []Addon, cfg AppConfig, mediaType, videoID string, m Me
 		chosen := filtered[n-1]
 		wasPlaying := mpvAlive()
 
+		// Register URL→videoID mapping so the ticker can track position correctly
+		RegisterVideo(videoID, chosen.URL)
+
 		if err := PlayStream(cfg, chosen.URL); err != nil {
 			blank()
 			fail("failed: " + err.Error())
@@ -331,8 +348,6 @@ func streamScreen(addons []Addon, cfg AppConfig, mediaType, videoID string, m Me
 			readLine()
 			continue
 		}
-
-		SetCurrentVideo(videoID)
 
 		// Seek to resume position on first play
 		if !wasPlaying && len(seekTo) > 0 && seekTo[0] > 0 {
@@ -569,9 +584,12 @@ func epPickerScreen(addons []Addon, cfg AppConfig, m Meta, sm SeriesMeta, allSea
 			}
 			ep := eps[res.Pick]
 
-			// Resume prompt
+			// Resume prompt — check by video_id first, fall back to show+season+ep
 			var seekPos float64
 			savedPos, savedDur, _ := GetPosition(ep.ID)
+			if savedPos == 0 {
+				savedPos, savedDur, _ = GetPositionByEpisode(m.ID, season, ep.Episode)
+			}
 			if savedPos > 0 && savedDur > 0 {
 				pct := (savedPos / savedDur) * 100
 				if pct >= 5 {

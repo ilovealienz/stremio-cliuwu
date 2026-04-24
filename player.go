@@ -16,7 +16,7 @@ import (
 	"golang.org/x/term"
 )
 
-// ── Socket ────────────────────────────────────────────────────────────────────
+// ── Socket path ───────────────────────────────────────────────────────────────
 
 func socketPath() string {
 	if runtime.GOOS == "windows" {
@@ -25,22 +25,14 @@ func socketPath() string {
 	return "/tmp/stremio-cliuwu.sock"
 }
 
+// ipcDial is implemented per-platform:
+//   ipc_unix.go    → net.DialTimeout("unix", ...)
+//   ipc_windows.go → winio.DialPipe(...)
+
 var (
 	ipcMu  sync.Mutex
 	ipcSeq uint32
 )
-
-func ipcDial() net.Conn {
-	network := "unix"
-	if runtime.GOOS == "windows" {
-		network = "pipe"
-	}
-	c, err := net.DialTimeout(network, socketPath(), 400*time.Millisecond)
-	if err != nil {
-		return nil
-	}
-	return c
-}
 
 func ipcSend(conn net.Conn, cmd []any) map[string]any {
 	id := atomic.AddUint32(&ipcSeq, 1)
@@ -78,7 +70,6 @@ func ipcSend(conn net.Conn, cmd []any) map[string]any {
 	return nil
 }
 
-// ipcCmd opens a fresh connection and sends one command. Used for one-off commands.
 func ipcCmd(cmd []any) bool {
 	conn := ipcDial()
 	if conn == nil {
@@ -145,7 +136,6 @@ func launchMpv(cfg AppConfig, streamURL string) error {
 	return fmt.Errorf("mpv started but socket never appeared")
 }
 
-// PlayStream sends a stream to mpv — appends if running, launches if not.
 func PlayStream(cfg AppConfig, streamURL string) error {
 	if mpvAlive() {
 		conn := ipcDial()
@@ -162,20 +152,55 @@ func PlayStream(cfg AppConfig, streamURL string) error {
 	return launchMpv(cfg, streamURL)
 }
 
+// ── Playlist tracking ─────────────────────────────────────────────────────────
+// Map stream URL → videoID, populated when PlayStream is called.
+// The ticker matches the currently playing URL to find the active videoID.
+
+var (
+	urlToVideoID = map[string]string{}
+	urlMu        sync.Mutex
+)
+
+// RegisterVideo stores the mapping of stream URL → videoID.
+func RegisterVideo(videoID, streamURL string) {
+	urlMu.Lock()
+	urlToVideoID[streamURL] = videoID
+	urlMu.Unlock()
+}
+
+// activeVideoIDFromURL asks mpv what filename/URL it is playing and
+// looks it up in our URL→videoID map.
+func activeVideoIDFromURL(conn net.Conn) string {
+	resp := ipcSend(conn, []any{"get_property", "path"})
+	if resp == nil || resp["error"] != "success" {
+		return ""
+	}
+	path, _ := resp["data"].(string)
+	if path == "" {
+		return ""
+	}
+	urlMu.Lock()
+	id := urlToVideoID[path]
+	urlMu.Unlock()
+	if id == "" {
+		// Try prefix match — URL may have query params appended
+		for registeredURL, vid := range urlToVideoID {
+			if strings.HasPrefix(path, registeredURL) || strings.HasPrefix(registeredURL, path) {
+				id = vid
+				break
+			}
+		}
+	}
+	return id
+}
+
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
 var (
-	lastStatus     MpvStatus
-	currentVideoID string // videoID being tracked for position saving
+	lastStatus    MpvStatus
+	activeVideoID string // videoID currently playing, matched by URL
 )
-
-// SetCurrentVideo tells the tracker which videoID is playing.
-func SetCurrentVideo(id string) {
-	ipcMu.Lock()
-	currentVideoID = id
-	ipcMu.Unlock()
-}
 
 func fetchStatus() MpvStatus {
 	conn := ipcDial()
@@ -183,6 +208,9 @@ func fetchStatus() MpvStatus {
 		if lastStatus.Alive {
 			lastStatus = MpvStatus{}
 			statusLines = 0
+			urlMu.Lock()
+			urlToVideoID = map[string]string{}
+			urlMu.Unlock()
 		}
 		return MpvStatus{}
 	}
@@ -197,9 +225,7 @@ func fetchStatus() MpvStatus {
 	}
 
 	toF := func(v any) float64 {
-		if v == nil {
-			return 0
-		}
+		if v == nil { return 0 }
 		f, _ := v.(float64)
 		return f
 	}
@@ -221,6 +247,9 @@ func fetchStatus() MpvStatus {
 		Paused:   toB(get("pause")),
 		Title:    toS(get("media-title")),
 	}
+
+	// Find which videoID matches what mpv is currently playing via URL
+	activeVideoID = activeVideoIDFromURL(conn)
 	if st.Duration == 0 && lastStatus.Duration > 0 {
 		st.Duration = lastStatus.Duration
 		st.Percent = lastStatus.Percent
@@ -235,13 +264,9 @@ func cleanTitle(s string) string {
 		return ""
 	}
 	once, err := url.QueryUnescape(s)
-	if err == nil {
-		s = once
-	}
+	if err == nil { s = once }
 	twice, err := url.QueryUnescape(s)
-	if err == nil {
-		s = twice
-	}
+	if err == nil { s = twice }
 	for _, ext := range []string{".mkv", ".mp4", ".avi", ".m4v", ".ts", ".mov", ".wmv"} {
 		if strings.HasSuffix(strings.ToLower(s), ext) {
 			s = s[:len(s)-len(ext)]
@@ -252,9 +277,7 @@ func cleanTitle(s string) string {
 }
 
 func fmtSecs(s float64) string {
-	if s < 0 {
-		s = 0
-	}
+	if s < 0 { s = 0 }
 	t := int(s)
 	h, m, sec := t/3600, (t%3600)/60, t%60
 	if h > 0 {
@@ -270,9 +293,7 @@ func buildBar(st MpvStatus) string {
 	title := ""
 	if t := cleanTitle(st.Title); t != "" {
 		maxW := tw() - 38
-		if maxW < 10 {
-			maxW = 10
-		}
+		if maxW < 10 { maxW = 10 }
 		runes := []rune(t)
 		if len(runes) > maxW {
 			t = string(runes[:maxW]) + "…"
@@ -334,9 +355,10 @@ func StatusStop() {
 func rewriteBar() {
 	st := fetchStatus()
 
-	// Save position to history every tick
-	if st.Alive && currentVideoID != "" && st.Duration > 0 {
-		go UpdatePosition(currentVideoID, st.Pos, st.Duration, st.Percent)
+	// Save position based on what mpv is actually playing
+	// activeVideoID is set inside fetchStatus using the same connection
+	if st.Alive && st.Duration > 0 && activeVideoID != "" {
+		go UpdatePosition(activeVideoID, st.Pos, st.Duration, st.Percent)
 	}
 
 	bar := buildBar(st)

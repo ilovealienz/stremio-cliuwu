@@ -65,6 +65,7 @@ func UpdatePosition(videoID string, pos, duration, percent float64) {
 }
 
 // ToggleWatchedByEpisode flips the watched state for a show+season+episode.
+// Only toggles existing entries — does not add new ones to avoid bare entries.
 func ToggleWatchedByEpisode(showID string, season, episode int) bool {
 	h := LoadHistory()
 	for i, e := range h.Items {
@@ -74,17 +75,25 @@ func ToggleWatchedByEpisode(showID string, season, episode int) bool {
 			return h.Items[i].Watched
 		}
 	}
-	// Not in history yet — add as watched
-	AddHistory(HistoryEntry{
-		ID: showID, Season: season, Episode: episode, Watched: true,
-	}, 0)
-	return true
+	// Not in history at all — return false, can only mark watched by watching it
+	return false
 }
 
 // GetPosition returns saved position for a videoID.
 func GetPosition(videoID string) (pos, duration float64, watched bool) {
 	for _, e := range LoadHistory().Items {
 		if e.VideoID == videoID {
+			return e.Position, e.Duration, e.Watched
+		}
+	}
+	return 0, 0, false
+}
+
+// GetPositionByEpisode returns saved position by show ID + season + episode.
+// Used when video_id may not be set on older history entries.
+func GetPositionByEpisode(showID string, season, episode int) (pos, duration float64, watched bool) {
+	for _, e := range LoadHistory().Items {
+		if e.ID == showID && e.Season == season && e.Episode == episode {
 			return e.Position, e.Duration, e.Watched
 		}
 	}
