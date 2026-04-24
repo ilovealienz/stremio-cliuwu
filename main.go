@@ -8,7 +8,7 @@ import (
 )
 
 const appName = "stremio-cliuwu"
-const version = "0.2.0"
+const version = "0.1.0"
 
 func firstRun() (AuthData, AppConfig, error) {
 	header("first time setup")

@@ -1,5 +1,5 @@
 BINARY  = stremio-cliuwu
-VERSION = 0.2.0
+VERSION = 0.1.0
 
 .PHONY: run build build-all build-linux build-windows install clean
 
