@@ -166,3 +166,5 @@ make build-all
 #          dist/stremio-cliuwu.exe
 #          dist/stremio-cliuwu-mac
 ```
+
+MADE WITH CLAUDE IS AI SLOP BUT IT WORKS FOR ME
