@@ -7,6 +7,17 @@ import (
 	"time"
 )
 
+// inProgressCache caches the last in-progress entry so the main menu
+// doesn't hit disk on every render. Invalidated whenever history changes.
+var (
+	inProgressCache   *HistoryEntry
+	inProgressValid   bool
+)
+
+func invalidateInProgress() {
+	inProgressValid = false
+}
+
 func LoadHistory() HistoryList {
 	b, err := os.ReadFile(histFile())
 	if err != nil {
@@ -59,6 +70,7 @@ func UpdatePosition(videoID string, pos, duration, percent float64) {
 				h.Items[i].Watched = true
 			}
 			saveHistory(h)
+			invalidateInProgress()
 			return
 		}
 	}
@@ -111,6 +123,7 @@ func ClearHistoryEntry(idx int) {
 
 func ClearAllHistory() {
 	saveHistory(HistoryList{})
+	invalidateInProgress()
 }
 
 // WatchedEpisodes returns (season,episode) pairs marked watched for a show.

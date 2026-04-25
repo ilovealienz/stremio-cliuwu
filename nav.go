@@ -200,7 +200,7 @@ func streamScreen(addons []Addon, cfg AppConfig, mediaType, videoID string, m Me
 		if filter != "" {
 			nav = append(nav, grey("c")+"=clear")
 		}
-		nav = append(nav, grey("/")+"=filter", grey("r")+"=reverse", grey("R")+"=rescan")
+		nav = append(nav, grey("/")+"=filter", grey("r")+"=reverse", grey("R")+"=rescan", grey("x")+"=remove")
 		if page > 0 {
 			nav = append(nav, grey("p")+"=prev")
 		}
@@ -257,6 +257,35 @@ func streamScreen(addons []Addon, cfg AppConfig, mediaType, videoID string, m Me
 			}
 			filter = ""
 			page   = 0
+			continue
+		case "x":
+			// Remove a single stream from the list without rescanning
+			header("streams")
+			fmt.Printf("  %s\n\n", grey(sub))
+			for i := start; i < end; i++ {
+				fmt.Printf("  %s  %s\n", accent(fmt.Sprintf("[%2d]", i+1)), filtLabels[i])
+			}
+			blank()
+			fmt.Printf("  %s  %s: ", grey("remove which"), grey("0=cancel"))
+			n, err := strconv.Atoi(readLine())
+			if err == nil && n >= 1 && n <= len(filtered) {
+				// Remove from playable and allLabels
+				target := filtered[n-1]
+				newPlayable := playable[:0]
+				newLabels := make([]string, 0, len(playable))
+				for i, s := range playable {
+					if s.URL != target.URL {
+						newPlayable = append(newPlayable, s)
+						newLabels = append(newLabels, allLabels[i])
+					}
+				}
+				playable = newPlayable
+				allLabels = newLabels
+				// Update cache too so rescan isn't needed
+				cacheStreams[videoID] = newPlayable
+				filter = ""
+				page = 0
+			}
 			continue
 		case "n":
 			if page < totalPages-1 {
@@ -740,16 +769,23 @@ func browseScreen(addons []Addon, cfg AppConfig, source string) {
 	Browse(source, 0, 10) // triggers cache population
 	allItems := cacheBrowse[source+":all"]
 
+	// Cache filtered results so redraws don't re-filter the whole list
+	var filtered []Meta
+	lastFilter := "~UNSET~" // sentinel so first run always filters
+
 	for {
 		perPage := contentRows(true)
 
-		// Apply filter
-		var filtered []Meta
-		fq := strings.ToLower(filter)
-		for _, m := range allItems {
-			if fq == "" || strings.Contains(strings.ToLower(m.Name), fq) {
-				filtered = append(filtered, m)
+		// Only re-filter when filter string changes
+		if filter != lastFilter {
+			filtered = filtered[:0]
+			fq := strings.ToLower(filter)
+			for _, m := range allItems {
+				if fq == "" || strings.Contains(strings.ToLower(m.Name), fq) {
+					filtered = append(filtered, m)
+				}
 			}
+			lastFilter = filter
 		}
 
 		if len(filtered) == 0 && filter == "" {
@@ -854,18 +890,25 @@ func browseScreen(addons []Addon, cfg AppConfig, source string) {
 
 // lastInProgress returns the most recently watched partial entry, or nil.
 func lastInProgress() *HistoryEntry {
+	// Return cached value if still valid
+	if inProgressValid {
+		return inProgressCache
+	}
+
 	h := LoadHistory()
+	inProgressCache = nil
 	for i := range h.Items {
 		e := &h.Items[i]
 		if e.Position > 0 && e.Duration > 0 && !e.Watched {
 			pct := (e.Position / e.Duration) * 100
-			// Only show if between 5% and 90% — nothing to resume outside that
 			if pct >= 5 && pct <= 90 {
-				return e
+				inProgressCache = e
+				break
 			}
 		}
 	}
-	return nil
+	inProgressValid = true
+	return inProgressCache
 }
 
 // continueWatching jumps straight to the stream picker for the last in-progress item.

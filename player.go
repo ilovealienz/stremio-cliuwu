@@ -290,16 +290,27 @@ func buildBar(st MpvStatus) string {
 	if !st.Alive {
 		return ""
 	}
+
+	// Calculate fixed part width: "▶ MM:SS / MM:SS (100%)  Cache: 100s  [paused]"
+	// Use worst case: 8+3+8+8+7+10+9 = ~55 chars for the non-title portion
+	fixedWidth := 55
+	if st.Paused {
+		fixedWidth += 9 // " [paused]"
+	}
+
 	title := ""
 	if t := cleanTitle(st.Title); t != "" {
-		maxW := tw() - 38
-		if maxW < 10 { maxW = 10 }
+		maxW := tw() - fixedWidth - 2 // -2 for padding
+		if maxW < 10 {
+			maxW = 10
+		}
 		runes := []rune(t)
 		if len(runes) > maxW {
 			t = string(runes[:maxW]) + "…"
 		}
 		title = grey(t) + "  "
 	}
+
 	pause := ""
 	if st.Paused {
 		pause = yell(" [paused]")
