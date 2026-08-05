@@ -6,15 +6,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
 	urlCinemeta = "https://v3-cinemeta.strem.io"
-	urlKitsu    = "https://anime-kitsu.strem.fun"
-	urlStremio  = "https://api.strem.io/api"
 	urlOMDB     = "https://www.omdbapi.com"
 )
 
@@ -50,331 +48,63 @@ func getJSON(u string, out any) error {
 	return json.NewDecoder(r.Body).Decode(out)
 }
 
-func postJSON(u string, body, out any) error {
-	b, _ := json.Marshal(body)
-	r, err := httpClient.Post(u, "application/json", strings.NewReader(string(b)))
-	if err != nil {
-		return err
-	}
-	defer r.Body.Close()
-	return json.NewDecoder(r.Body).Decode(out)
-}
-
-// ── Cache ─────────────────────────────────────────────────────────────────────
-
-var (
-	cacheBrowse = map[string][]Meta{}
-	cacheSearch = map[string][]Meta{}
-	cacheSeries = map[string]SeriesMeta{}
-	cacheEpData = map[string]map[int]map[int]Video{} // id → season → ep → Video
-	cacheStreams = map[string][]Stream{}
-)
-
-// ── Year enrichment ───────────────────────────────────────────────────────────
-
-func enrichYear(m *Meta, omdbKey string) {
-	if m.Year != "" {
-		return
-	}
-	var base, mt string
-	switch m.Source {
-	case "anime":
-		base, mt = urlKitsu, "series"
-	case "show":
-		base, mt = urlCinemeta, "series"
-	default:
-		base, mt = urlCinemeta, "movie"
-	}
-	var detail struct {
-		Meta struct {
-			Year        string `json:"year"`
-			ReleaseInfo string `json:"releaseInfo"`
-		} `json:"meta"`
-	}
-	if getJSON(fmt.Sprintf("%s/meta/%s/%s.json", base, mt, url.PathEscape(m.ID)), &detail) == nil {
-		if detail.Meta.Year != "" {
-			m.Year = detail.Meta.Year
-		} else if detail.Meta.ReleaseInfo != "" {
-			m.Year = detail.Meta.ReleaseInfo
-		}
-	}
-	// OMDB fallback for IMDB IDs
-	if m.Year == "" && strings.HasPrefix(m.ID, "tt") && omdbKey != "" {
-		var omdb struct{ Year string `json:"Year"` }
-		if getJSON(fmt.Sprintf("%s/?i=%s&apikey=%s", urlOMDB, m.ID, omdbKey), &omdb) == nil {
-			m.Year = omdb.Year
-		}
-	}
-}
-
-// ── Account ───────────────────────────────────────────────────────────────────
-
-func StremioLogin() (AuthData, error) {
-	blank()
-	fmt.Printf("  %s  email + password\n", bold("[1]"))
-	fmt.Printf("  %s  paste authKey\n", bold("[2]"))
-	blank()
-	hint("get authKey → web.stremio.com › F12 console:")
-	hint(`JSON.parse(localStorage.getItem("profile")).auth.key`)
-	blank()
-
-	if prompt("choice") == "2" {
-		return AuthData{AuthKey: prompt("authKey")}, nil
-	}
-	email := prompt("email")
-	pw := readPassword("password")
-	spin("logging in...")
-
-	var res struct {
-		Result *struct {
-			AuthKey string `json:"authKey"`
-		} `json:"result"`
-		Error *struct{ Message string `json:"message"` } `json:"error"`
-	}
-	if err := postJSON(urlStremio+"/login", map[string]any{
-		"type": "Login", "email": email, "password": pw, "facebook": false,
-	}, &res); err != nil {
-		return AuthData{}, err
-	}
-	if res.Result == nil || res.Result.AuthKey == "" {
-		msg := "unknown error"
-		if res.Error != nil {
-			msg = res.Error.Message
-		}
-		return AuthData{}, fmt.Errorf(msg)
-	}
-	return AuthData{AuthKey: res.Result.AuthKey, Email: email}, nil
-}
-
-func GetAddons(key string) ([]Addon, error) {
-	var res struct {
-		Result *struct {
-			Addons []Addon `json:"addons"`
-		} `json:"result"`
-	}
-	err := postJSON(urlStremio+"/addonCollectionGet", map[string]any{
-		"type": "AddonCollectionGet", "authKey": key, "update": true,
-	}, &res)
-	if err != nil || res.Result == nil {
-		return nil, fmt.Errorf("failed to load addons")
-	}
-	return res.Result.Addons, nil
-}
-
-// ── Browse ────────────────────────────────────────────────────────────────────
-
-func Browse(source string, page, perPage int) ([]Meta, bool) {
-	key := source + ":all"
-	if _, ok := cacheBrowse[key]; !ok {
-		var all []Meta
-		switch source {
-		case "movie":
-			var resp struct{ Metas []Meta `json:"metas"` }
-			if getJSON(urlCinemeta+"/catalog/movie/top.json", &resp) == nil {
-				for i := range resp.Metas {
-					resp.Metas[i].Source = "movie"
-					resp.Metas[i].Type = "movie"
-					enrichYear(&resp.Metas[i], "")
-				}
-				all = resp.Metas
-			}
-		case "show":
-			var resp struct{ Metas []Meta `json:"metas"` }
-			if getJSON(urlCinemeta+"/catalog/series/top.json", &resp) == nil {
-				for i := range resp.Metas {
-					resp.Metas[i].Source = "show"
-					resp.Metas[i].Type = "series"
-					enrichYear(&resp.Metas[i], "")
-				}
-				all = resp.Metas
-			}
-		case "anime":
-			var resp struct{ Metas []Meta `json:"metas"` }
-			for _, id := range []string{
-				"kitsu-anime-popular", "kitsu-anime-airing",
-				"kitsu-anime-rating", "kitsu-anime-trending",
-			} {
-				if getJSON(fmt.Sprintf("%s/catalog/anime/%s.json", urlKitsu, id), &resp) == nil && len(resp.Metas) > 0 {
-					break
-				}
-			}
-			for i := range resp.Metas {
-				resp.Metas[i].Source = "anime"
-				resp.Metas[i].Type = "series"
-			}
-			all = resp.Metas
-		}
-		cacheBrowse[key] = all
-	}
-
-	all := cacheBrowse[key]
-	start := page * perPage
-	if start >= len(all) {
-		return nil, false
-	}
-	end := start + perPage
-	hasMore := end < len(all)
-	if end > len(all) {
-		end = len(all)
-	}
-	result := make([]Meta, end-start)
-	copy(result, all[start:end])
-	return result, hasMore
-}
-
-// ── Search ────────────────────────────────────────────────────────────────────
-
-func Search(query, omdbKey string) []Meta {
-	key := strings.ToLower(strings.TrimSpace(query))
-	if v, ok := cacheSearch[key]; ok {
-		return v
-	}
-	q := url.QueryEscape(query)
-	var results []Meta
-
-	var mv struct{ Metas []Meta `json:"metas"` }
-	if getJSON(fmt.Sprintf("%s/catalog/movie/top/search=%s.json", urlCinemeta, q), &mv) == nil {
-		for i := range mv.Metas {
-			mv.Metas[i].Source = "movie"
-			mv.Metas[i].Type = "movie"
-			enrichYear(&mv.Metas[i], omdbKey)
-		}
-		results = append(results, mv.Metas...)
-	}
-
-	var sv struct{ Metas []Meta `json:"metas"` }
-	if getJSON(fmt.Sprintf("%s/catalog/series/top/search=%s.json", urlCinemeta, q), &sv) == nil {
-		for i := range sv.Metas {
-			sv.Metas[i].Source = "show"
-			sv.Metas[i].Type = "series"
-			enrichYear(&sv.Metas[i], omdbKey)
-		}
-		results = append(results, sv.Metas...)
-	}
-
-	var av struct{ Metas []Meta `json:"metas"` }
-	if getJSON(fmt.Sprintf("%s/catalog/anime/kitsu-anime-list/search=%s.json", urlKitsu, q), &av) == nil {
-		for i := range av.Metas {
-			av.Metas[i].Source = "anime"
-			av.Metas[i].Type = "series"
-		}
-		results = append(results, av.Metas...)
-	}
-
-	cacheSearch[key] = results
-	return results
-}
-
-// ── Series meta ───────────────────────────────────────────────────────────────
-
-func GetSeriesMeta(m Meta) SeriesMeta {
-	if v, ok := cacheSeries[m.ID]; ok {
-		return v
-	}
-	var resp struct{ Meta SeriesMeta `json:"meta"` }
-	base := urlCinemeta
-	if m.Source == "anime" {
-		base = urlKitsu
-	}
-	getJSON(fmt.Sprintf("%s/meta/series/%s.json", base, url.PathEscape(m.ID)), &resp)
-	cacheSeries[m.ID] = resp.Meta
-	return resp.Meta
-}
-
-// GetSeasonEpisodes returns sorted episodes for a season, enriched with OMDB data.
-func GetSeasonEpisodes(m Meta, season int, sm SeriesMeta, omdbKey string) []Video {
-	// Check cache
-	if cacheEpData[m.ID] == nil {
-		cacheEpData[m.ID] = map[int]map[int]Video{}
-	}
-	if _, ok := cacheEpData[m.ID][season]; ok {
-		eps := make([]Video, 0, len(cacheEpData[m.ID][season]))
-		for _, v := range cacheEpData[m.ID][season] {
-			eps = append(eps, v)
-		}
-		sort.Slice(eps, func(i, j int) bool { return eps[i].Episode < eps[j].Episode })
-		return eps
-	}
-
-	// Build from sm.Videos
-	byEp := map[int]Video{}
-	for _, v := range sm.Videos {
-		if v.Season == season {
-			byEp[v.Episode] = v
-		}
-	}
-
-	// Enrich from OMDB for IMDB-based shows
-	if m.Source != "anime" && strings.HasPrefix(m.ID, "tt") && omdbKey != "" {
-		var resp struct {
-			Episodes []struct {
-				Episode  string `json:"Episode"`
-				Title    string `json:"Title"`
-				Released string `json:"Released"`
-			} `json:"Episodes"`
-		}
-		if getJSON(fmt.Sprintf("%s/?i=%s&Season=%d&apikey=%s", urlOMDB, m.ID, season, omdbKey), &resp) == nil {
-			for _, e := range resp.Episodes {
-				n := 0
-				fmt.Sscanf(e.Episode, "%d", &n)
-				if n > 0 {
-					v := byEp[n]
-					if e.Title != "" && e.Title != "N/A" {
-						v.Title = e.Title
-					}
-					if e.Released != "" && e.Released != "N/A" {
-						v.Released = e.Released
-					}
-					byEp[n] = v
-				}
-			}
-		}
-	}
-
-	cacheEpData[m.ID][season] = byEp
-
-	eps := make([]Video, 0, len(byEp))
-	for _, v := range byEp {
-		eps = append(eps, v)
-	}
-	sort.Slice(eps, func(i, j int) bool { return eps[i].Episode < eps[j].Episode })
-	return eps
-}
-
 // ── Streams ───────────────────────────────────────────────────────────────────
 
+// Debrid providers hand out time-limited URLs, so this TTL is deliberately
+// short. InvalidateStreams drops an entry when a stream fails to open.
+var cacheStreams = newCache[[]Stream](5*time.Minute, 100)
+
+func InvalidateStreams(videoID string) { cacheStreams.Delete(videoID) }
+
 func GetStreams(addons []Addon, mediaType, videoID string) []Stream {
-	if v, ok := cacheStreams[videoID]; ok {
+	if v, ok := cacheStreams.Get(videoID); ok {
 		return v
 	}
-	var all []Stream
+
+	// Addons that can serve this id, in configured order.
+	var usable []Addon
 	for _, a := range addons {
-		if !a.SupportsStream(mediaType, videoID) {
+		if a.Err != nil || !a.SupportsStream(mediaType, videoID) {
 			continue
 		}
-		name := a.Manifest.Name
-		base := strings.TrimSuffix(strings.TrimRight(a.TransportURL, "/"), "/manifest.json")
+		base := addonBase(a)
 		if base == "" {
 			continue
 		}
-		// Warn and skip addons that are only reachable on localhost — the CLI
-		// runs outside the Stremio app process so it cannot reach them.
+		// Localhost addons are only reachable from inside the Stremio app.
 		if strings.HasPrefix(base, "http://127.") || strings.HasPrefix(base, "http://localhost") {
-			fmt.Printf("  %s  %s  %s\n", grey("⚠"), grey(name), grey("(localhost addon — skipped)"))
 			continue
 		}
-		u := fmt.Sprintf("%s/stream/%s/%s.json", base, mediaType, url.PathEscape(videoID))
-		var resp struct{ Streams []Stream `json:"streams"` }
-		if getJSON(u, &resp) == nil && len(resp.Streams) > 0 {
-			fmt.Printf("  %s  %s  %s\n", good("✓"), bold(name), grey(fmt.Sprintf("(%d)", len(resp.Streams))))
-			for i := range resp.Streams {
-				resp.Streams[i].Addon = name
-			}
-			all = append(all, resp.Streams...)
-		} else {
-			fmt.Printf("  %s  %s\n", grey("–"), grey(name))
-		}
+		usable = append(usable, a)
 	}
-	cacheStreams[videoID] = all
+
+	// Fan out — a debrid addon can take several seconds on its own, and doing
+	// these serially was the single slowest thing in the old client.
+	results := make([][]Stream, len(usable))
+	var wg sync.WaitGroup
+	for i, a := range usable {
+		wg.Add(1)
+		go func(i int, a Addon) {
+			defer wg.Done()
+			u := fmt.Sprintf("%s/stream/%s/%s.json", addonBase(a), mediaType, url.PathEscape(videoID))
+			var resp struct {
+				Streams []Stream `json:"streams"`
+			}
+			if getJSON(u, &resp) != nil {
+				return
+			}
+			for j := range resp.Streams {
+				resp.Streams[j].Addon = a.Manifest.Name
+			}
+			results[i] = resp.Streams
+		}(i, a)
+	}
+	wg.Wait()
+
+	var all []Stream
+	for _, r := range results {
+		all = append(all, r...)
+	}
+	cacheStreams.Set(videoID, all)
 	return all
 }

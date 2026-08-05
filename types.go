@@ -5,58 +5,37 @@ import (
 	"time"
 )
 
-// ── Navigation ────────────────────────────────────────────────────────────────
-
-type navAct int
-
-const (
-	navOK      navAct = iota // stay / continue
-	navBack                  // b — go back one level
-	navBackAll               // B — go back to top of current flow
-	navQuit                  // 0/q
-)
-
 // ── List rendering ────────────────────────────────────────────────────────────
 
 // Item is a single row in any list screen.
 type Item struct {
 	Label   string // primary text
-	Sub     string // dimmed secondary text (shown on same line after label)
+	Sub     string // dimmed secondary text
 	Badge   string // right-aligned tag e.g. "[movie]" "S02 · 4/12"
-	Watched bool   // prefix with green ✓ if true
-	Dim     bool   // grey out entire row (e.g. already watched)
+	Watched bool   // prefix with green ✓
+	Dim     bool   // grey out entire row
+	Header  bool   // section label or blank spacer — not selectable
 }
 
-// ── API types ─────────────────────────────────────────────────────────────────
+func (i Item) selectable() bool { return !i.Header }
 
-type Meta struct {
-	ID       string `json:"id"`
-	Type     string `json:"type"`
-	Name     string `json:"name"`
-	Year     string `json:"year"`
-	Released string `json:"released"`
-	Source   string // "movie" | "show" | "anime" — injected
+// ── Addons ────────────────────────────────────────────────────────────────────
+
+// AddonRef is what we persist: just the manifest URL and whether it's on.
+type AddonRef struct {
+	URL      string `json:"url"`
+	Disabled bool   `json:"disabled"`
 }
 
-type Video struct {
-	ID       string `json:"id"`
-	Season   int    `json:"season"`
-	Episode  int    `json:"episode"`
-	Title    string `json:"title"`
-	Released string `json:"released"`
-	Overview string `json:"overview"`
+type AddonList struct {
+	Items []AddonRef `json:"items"`
 }
 
-type SeriesMeta struct {
-	Videos []Video `json:"videos"`
-}
-
-type Stream struct {
-	URL         string `json:"url"`
-	Name        string `json:"name"`
-	Title       string `json:"title"`
-	Description string `json:"description"`
-	Addon       string // injected
+// CatalogExtra is an `extra` entry on a catalog: "search", "skip", "genre".
+type CatalogExtra struct {
+	Name       string   `json:"name"`
+	IsRequired bool     `json:"isRequired"`
+	Options    []string `json:"options"`
 }
 
 // AddonCatalog represents a catalog entry in an addon manifest.
@@ -64,35 +43,117 @@ type AddonCatalog struct {
 	ID   string `json:"id"`
 	Type string `json:"type"`
 	Name string `json:"name"`
+
+	// Modern manifests use `extra`; older ones use these two flat lists.
+	Extra          []CatalogExtra `json:"extra"`
+	ExtraSupported []string       `json:"extraSupported"`
+	ExtraRequired  []string       `json:"extraRequired"`
 }
 
+func (c AddonCatalog) Supports(extra string) bool {
+	for _, e := range c.Extra {
+		if e.Name == extra {
+			return true
+		}
+	}
+	for _, e := range c.ExtraSupported {
+		if e == extra {
+			return true
+		}
+	}
+	return false
+}
+
+func (c AddonCatalog) Requires(extra string) bool {
+	for _, e := range c.Extra {
+		if e.Name == extra && e.IsRequired {
+			return true
+		}
+	}
+	for _, e := range c.ExtraRequired {
+		if e == extra {
+			return true
+		}
+	}
+	return false
+}
+
+// Browsable reports whether the catalog can be fetched with no arguments.
+// A catalog that *requires* something like a genre can only be searched into,
+// not listed, so it has no place in the browse picker.
+func (c AddonCatalog) Browsable() bool {
+	for _, e := range c.Extra {
+		if e.IsRequired && e.Name != "skip" {
+			return false
+		}
+	}
+	for _, e := range c.ExtraRequired {
+		if e != "skip" {
+			return false
+		}
+	}
+	return true
+}
+
+// CatalogRef is a catalog bound to the addon that serves it.
+type CatalogRef struct {
+	AddonName string
+	Base      string
+	Type      string // manifest type: movie, series, anime, other…
+	ID        string
+	Name      string
+	Search    bool
+	Skip      bool
+}
+
+// Kind buckets a catalog under one of the top-level menu entries.
+func (c CatalogRef) Kind() string {
+	switch c.Type {
+	case "movie":
+		return "movie"
+	case "series":
+		return "show"
+	case "anime":
+		return "anime"
+	}
+	return "other"
+}
+
+func (c CatalogRef) Key() string { return c.Base + "|" + c.Type + "|" + c.ID }
+
+type Manifest struct {
+	ID          string         `json:"id"`
+	Version     string         `json:"version"`
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Types       []string       `json:"types"`
+	Resources   []any          `json:"resources"`
+	Catalogs    []AddonCatalog `json:"catalogs"`
+}
+
+// Addon is a fetched, live addon: its manifest URL plus the parsed manifest.
 type Addon struct {
-	TransportURL string `json:"transportUrl"`
-	Manifest     struct {
-		Name      string         `json:"name"`
-		Resources []any          `json:"resources"`
-		Catalogs  []AddonCatalog `json:"catalogs"`
-	} `json:"manifest"`
+	TransportURL string   `json:"transportUrl"`
+	Manifest     Manifest `json:"manifest"`
+	Err          error    `json:"-"` // set if the manifest failed to load
 }
 
-// streamResource holds the parsed fields of a resource object that declares "stream".
+// streamResource holds the parsed fields of a resource object declaring "stream".
 type streamResource struct {
 	types      []string
 	idPrefixes []string
 }
 
-// parseStreamResources returns all stream resources declared by this addon,
-// including their supported types and idPrefixes (empty slice = no restriction).
-func (a Addon) parseStreamResources() []streamResource {
+func (a Addon) parseResources(name string) []streamResource {
 	var out []streamResource
 	for _, r := range a.Manifest.Resources {
 		switch v := r.(type) {
 		case string:
-			if v == "stream" {
+			if v == name {
 				out = append(out, streamResource{}) // no restrictions
 			}
 		case map[string]any:
-			if v["name"] != "stream" {
+			if v["name"] != name {
 				continue
 			}
 			sr := streamResource{}
@@ -116,16 +177,20 @@ func (a Addon) parseStreamResources() []streamResource {
 	return out
 }
 
-// HasStreams returns true if the addon declares a stream resource that supports
-// the given mediaType and videoID. Pass empty strings to skip filtering.
-func (a Addon) HasStreams() bool {
-	return len(a.parseStreamResources()) > 0
-}
+// HasStreams reports whether the addon declares any stream resource.
+func (a Addon) HasStreams() bool { return len(a.parseResources("stream")) > 0 }
 
-// SupportsStream returns true if this addon's stream resources cover the given
+// SupportsStream reports whether this addon's stream resources cover the given
 // mediaType (e.g. "movie", "series") and videoID (checked against idPrefixes).
 func (a Addon) SupportsStream(mediaType, videoID string) bool {
-	for _, sr := range a.parseStreamResources() {
+	return a.SupportsResource("stream", mediaType, videoID)
+}
+
+// SupportsResource is the general form: does this addon serve `name` for the
+// given type and id? Used to find whichever addon can answer a meta request,
+// rather than guessing between Cinemeta and Kitsu by source.
+func (a Addon) SupportsResource(name, mediaType, id string) bool {
+	for _, sr := range a.parseResources(name) {
 		typeOK := len(sr.types) == 0
 		for _, t := range sr.types {
 			if t == mediaType {
@@ -138,7 +203,7 @@ func (a Addon) SupportsStream(mediaType, videoID string) bool {
 		}
 		prefixOK := len(sr.idPrefixes) == 0
 		for _, p := range sr.idPrefixes {
-			if strings.HasPrefix(videoID, p) {
+			if strings.HasPrefix(id, p) {
 				prefixOK = true
 				break
 			}
@@ -150,39 +215,133 @@ func (a Addon) SupportsStream(mediaType, videoID string) bool {
 	return false
 }
 
-// ── Episode context ───────────────────────────────────────────────────────────
+// ── Catalog / meta types ──────────────────────────────────────────────────────
 
-// EpCtx carries episode list context into the stream picker so
-// [ and ] can navigate to adjacent episodes without going back through menus.
-type EpCtx struct {
+type Meta struct {
+	ID string `json:"id"`
+	// Poster/Description deliberately omitted — nothing renders them.
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Year        string `json:"year"`
+	ReleaseInfo string `json:"releaseInfo"`
+	Released    string `json:"released"`
+
+	Source string // "movie" | "show" | "anime" — injected
+	Base   string // addon base that produced this, used as a meta lookup hint
+}
+
+// normalize fills Year from releaseInfo. Cinemeta and Kitsu both return
+// releaseInfo on catalog rows and `year` only on the full meta object, which
+// is why the old code fired an HTTP request per row just to show "(2019)".
+func (m *Meta) normalize(source, base string) {
+	m.Source = source
+	m.Base = base
+	if m.Type == "" {
+		if source == "movie" {
+			m.Type = "movie"
+		} else {
+			m.Type = "series"
+		}
+	}
+	if m.Year == "" && m.ReleaseInfo != "" {
+		y := m.ReleaseInfo
+		for _, sep := range []string{"–", "-", "—"} {
+			if i := strings.Index(y, sep); i > 0 {
+				y = y[:i]
+				break
+			}
+		}
+		m.Year = strings.TrimSpace(y)
+	}
+}
+
+type Video struct {
+	ID       string `json:"id"`
+	Season   int    `json:"season"`
+	Episode  int    `json:"episode"`
+	Title    string `json:"title"`
+	Released string `json:"released"`
+	Overview string `json:"overview"`
+}
+
+type SeriesMeta struct {
+	Videos []Video `json:"videos"`
+}
+
+type Stream struct {
+	URL         string `json:"url"`
+	Name        string `json:"name"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Addon       string // injected
+}
+
+// ── Episode queue ─────────────────────────────────────────────────────────────
+
+// EpQueue is the season context handed to the player so it can advance to the
+// next episode itself. With loadfile/replace there is no mpv playlist to lean
+// on, so autoplay lives here instead.
+type EpQueue struct {
 	Show     Meta
 	Season   int
-	Episodes []Video // sorted list for this season
-	Index    int     // current index into Episodes
+	Episodes []Video
+	Index    int
 }
 
-// ── Auth / config ─────────────────────────────────────────────────────────────
+func (q *EpQueue) HasPrev() bool { return q != nil && q.Index > 0 }
+func (q *EpQueue) HasNext() bool { return q != nil && q.Index < len(q.Episodes)-1 }
 
-type AuthData struct {
-	AuthKey string `json:"authKey"`
-	Email   string `json:"email"`
-}
+// ── Config ────────────────────────────────────────────────────────────────────
+
+// configVersion is bumped whenever a new field needs a non-zero default.
+// Without this, adding a bool to the struct silently gives every existing
+// install `false`, because encoding/json just leaves absent fields alone.
+const configVersion = 2
 
 type AppConfig struct {
+	Version          int    `json:"version"`
 	MpvPath          string `json:"mpv_path"`
 	PreferredQuality string `json:"preferred_quality"`
 	SubtitleLang     string `json:"subtitle_lang"`
 	HistoryMax       int    `json:"history_max"`
 	OmdbKey          string `json:"omdb_key"`
+	AutoNext         bool   `json:"auto_next"`
+	AutoResume       bool   `json:"auto_resume"`
+	CloseMpvOnExit   bool   `json:"close_mpv_on_exit"`
+	CachedFirst      bool   `json:"cached_first"`
 }
 
-func (c *AppConfig) SetDefaults() {
+// SetDefaults fills in anything missing. Returns true if it changed something,
+// so the caller can persist the upgrade once rather than on every load.
+func (c *AppConfig) SetDefaults() bool {
+	changed := false
+
+	if c.Version < 1 {
+		// Pre-versioned config (or a fresh one): opt into the behaviour that
+		// used to be implicit.
+		c.AutoNext = true
+		c.AutoResume = true
+		c.CloseMpvOnExit = true
+		c.Version = 1
+		changed = true
+	}
+
+	if c.Version < 2 {
+		c.CachedFirst = true
+		changed = true
+	}
+
 	if c.HistoryMax <= 0 {
 		c.HistoryMax = 100
+		changed = true
 	}
 	if c.OmdbKey == "" {
 		c.OmdbKey = "trilogy"
+		changed = true
 	}
+
+	c.Version = configVersion
+	return changed
 }
 
 // ── Favourites ────────────────────────────────────────────────────────────────
@@ -221,16 +380,4 @@ type HistoryEntry struct {
 
 type HistoryList struct {
 	Items []HistoryEntry `json:"items"`
-}
-
-// ── Player ────────────────────────────────────────────────────────────────────
-
-type MpvStatus struct {
-	Alive    bool
-	Title    string
-	Pos      float64
-	Duration float64
-	Percent  float64
-	Cache    float64
-	Paused   bool
 }

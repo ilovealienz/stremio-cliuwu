@@ -3,149 +3,123 @@ package main
 import (
 	"fmt"
 	"os"
-	"strings"
-	"time"
+	"os/signal"
+	"sync"
+	"syscall"
+
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 const appName = "stremio-cliuwu"
-const version = "0.1.3"
-
-func firstRun() (AuthData, AppConfig, error) {
-	header("first time setup")
-
-	fmt.Printf("  %s  %s\n", bold("step 1"), white("vault password"))
-	blank()
-	hint("encrypts your login with argon2id + AES-256-GCM")
-	hint("machine-bound — useless on any other machine")
-	hint("only asked once, never again")
-	blank()
-
-	var vaultPw string
-	for {
-		pw1 := readPassword("vault password")
-		pw2 := readPassword("confirm")
-		if pw1 == pw2 {
-			vaultPw = pw1
-			break
-		}
-		fmt.Printf("  %s\n\n", bad("passwords do not match"))
-	}
-
-	blank()
-	spin("deriving key via argon2id...")
-	vk := deriveVaultKey(vaultPw)
-	ok("vault key derived")
-
-	blank()
-	fmt.Printf("  %s  %s\n", bold("step 2"), white("locate mpv"))
-	mpvPath, err := setupMpv()
-	if err != nil {
-		return AuthData{}, AppConfig{}, err
-	}
-
-	blank()
-	fmt.Printf("  %s  %s\n", bold("step 3"), white("stremio login"))
-	auth, err := StremioLogin()
-	if err != nil {
-		return AuthData{}, AppConfig{}, err
-	}
-
-	cfg := AppConfig{MpvPath: mpvPath}
-	cfg.SetDefaults()
-
-	blank()
-	spin("saving...")
-	if err := SaveAuth(auth, vk); err != nil {
-		return AuthData{}, AppConfig{}, err
-	}
-	SaveConfig(cfg)
-	ok(fmt.Sprintf("saved to %s", grey(configDir())))
-	blank()
-	hint("vault password will never be asked again on this machine")
-
-	return auth, cfg, nil
-}
+var version = "0.2.0"
 
 func main() {
-	// --version flag
 	for _, arg := range os.Args[1:] {
-		if arg == "--version" || arg == "-v" {
+		switch arg {
+		case "--version", "-v":
 			fmt.Printf("%s %s\n", appName, version)
+			return
+		case "--config":
+			fmt.Println(configDir())
+			return
+		case "--help", "-h":
+			usage()
 			return
 		}
 	}
 
-	initSignals()
-	StatusStart()
+	cfg := LoadConfig()
+	if cfg.MpvPath == "" {
+		cfg.MpvPath = detectMpv()
+		SaveConfig(cfg)
+	}
 
-	var authKey string
-	var cfg AppConfig
-
-	auth, err := LoadAuth()
-	cfg = LoadConfig()
-
-	if err != nil {
-		if _, statErr := os.Stat(authFile()); statErr == nil {
-			header("")
-			fail("couldn't decrypt saved session")
-			hint("machine identity may have changed or file is corrupt")
-			hint("clearing saved session")
-			blank()
-			ClearAuth()
-			time.Sleep(1200 * time.Millisecond)
-		}
-		a, c, err := firstRun()
-		if err != nil {
-			fail(err.Error())
-			os.Exit(1)
-		}
-		authKey = a.AuthKey
-		cfg = c
-	} else {
-		authKey = auth.AuthKey
-		if cfg.MpvPath == "" {
-			cfg.MpvPath = detectMpv()
-		}
-		if cfg.MpvPath == "" {
-			header("mpv not configured")
-			mpvPath, err := setupMpv()
-			if err != nil {
-				fail(err.Error())
-				os.Exit(1)
-			}
-			cfg.MpvPath = mpvPath
-			SaveConfig(cfg)
-		}
-
-		header("")
-		if auth.Email != "" {
-			ok(fmt.Sprintf("logged in as  %s", bold(auth.Email)))
-		} else {
-			ok("loaded saved session")
+	// First run: no addons.json yet, so seed the two metadata addons. Stream
+	// addons are the user's to add — there's no account to pull them from.
+	refs := LoadAddonRefs()
+	firstRun := false
+	if len(refs.Items) == 0 {
+		if _, err := os.Stat(addonsFile()); os.IsNotExist(err) {
+			refs = SeedAddons()
+			firstRun = true
 		}
 	}
 
-	blank()
-	spin("loading addons...")
-	addons, err := GetAddons(authKey)
-	if err != nil || len(addons) == 0 {
-		fail("no addons found — session may have expired")
-		hint("delete " + authFile() + " to re-login")
+	player := NewPlayer(cfg)
+	ctx = &appCtx{
+		cfg:    cfg,
+		refs:   refs,
+		addons: LoadAddons(refs),
+		player: player,
+	}
+
+	root := newMenuScreen()
+	model := newApp(root)
+
+	prog := tea.NewProgram(model, tea.WithAltScreen())
+	ctx.prog = prog
+	player.Attach(prog)
+
+	if firstRun {
+		go prog.Send(toastMsg{text: "welcome — add your stream addons under 'addons'"})
+	}
+	if cfg.MpvPath == "" {
+		go prog.Send(toastMsg{text: "mpv not found — set its path under 'settings'", isErr: true})
+	}
+
+	// cleanup must be idempotent: it runs on the normal exit path, and again
+	// from the signal handler if we're killed before Run() returns.
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			if ctx.cfg.CloseMpvOnExit {
+				player.Quit()
+			} else {
+				player.Shutdown()
+			}
+		})
+	}
+	defer cleanup()
+
+	// SIGTERM/SIGHUP don't go through Bubble Tea, so flush position and stop
+	// mpv ourselves rather than orphaning a player that keeps advancing with
+	// nothing recording where it got to.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
+	go func() {
+		<-sigs
+		cleanup()
+		os.Exit(130)
+	}()
+
+	if _, err := prog.Run(); err != nil {
+		cleanup()
+		fmt.Fprintln(os.Stderr, "error:", err)
 		os.Exit(1)
 	}
 
-	names := make([]string, len(addons))
-	for i, a := range addons {
-		names[i] = a.Manifest.Name
-	}
-	ok(fmt.Sprintf("%d addon(s) loaded", len(addons)))
-	hint(strings.Join(names, "  ·  "))
-	blank()
-	time.Sleep(600 * time.Millisecond)
-
-	mainMenu(addons, cfg)
-
-	StatusStop()
-	clearScreen()
+	cleanup()
 	fmt.Printf("\n  %s  %s\n\n", accent(appName), grey("bye ♡"))
+}
+
+func usage() {
+	fmt.Printf(`%s %s
+
+  a terminal stremio client — no account, just addon manifest urls
+
+  usage:
+    %s              launch the tui
+    %s --version    print version
+    %s --config     print the config directory
+
+  config lives in %s
+    config.json     mpv path, quality preference, autoplay
+    addons.json     your addon manifest urls (mode 0600)
+    favourites.json
+    history.json
+
+  add addons from the 'addons' screen, e.g.
+    https://v3-cinemeta.strem.io/manifest.json
+    https://torrentio.strem.fun/torbox=<key>/manifest.json
+`, appName, version, appName, appName, appName, configDir())
 }

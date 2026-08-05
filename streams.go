@@ -58,7 +58,10 @@ func extractSize(s string) string {
 }
 
 // FmtStream produces a readable label for a stream entry.
-func FmtStream(s Stream) string {
+func FmtStream(s Stream, width int) string {
+	if width < 40 {
+		width = 80 // not sized yet, or a very narrow terminal
+	}
 	tag := grey("[" + s.Addon + "]")
 
 	cached := ""
@@ -100,7 +103,7 @@ func FmtStream(s Stream) string {
 	if filename != "" {
 		// Leave room for the addon tag, resolution, source, size and padding
 		// roughly 40 chars of fixed content, rest goes to filename
-		maxFilename := tw() - 42
+		maxFilename := width - 42
 		if maxFilename < 20 {
 			maxFilename = 20
 		}
@@ -117,16 +120,51 @@ func FmtStream(s Stream) string {
 	return tag + "  " + strings.Join(parts, "  ")
 }
 
-// SortStreams moves streams matching the preferred quality to the top.
-func SortStreams(streams []Stream, preferred string) []Stream {
-	if preferred == "" {
-		return streams
+// cachedMarkers are how the common debrid addons signal instant availability.
+// Torrentio uses ⚡ plus a "[RD+]"-style provider tag; ⏳ means it would have to
+// be downloaded first.
+var cachedProviderRe = regexp.MustCompile(`\[(RD|TB|AD|PM|DL|OC|PR)\+\]`)
+
+// streamCached classifies a stream: 1 cached, -1 explicitly not cached,
+// 0 unknown (a direct HTTP addon, say, where the question doesn't apply).
+func streamCached(s Stream) int {
+	hay := s.Name + " " + s.Title + " " + s.Description
+
+	switch {
+	case strings.Contains(hay, "⚡"), cachedProviderRe.MatchString(hay):
+		return 1
+	case strings.Contains(hay, "⏳"),
+		strings.Contains(strings.ToLower(hay), "download"):
+		return -1
 	}
+	return 0
+}
+
+// SortStreams orders the stream list. Cached-first matters more than
+// resolution in practice: picking an uncached debrid result means waiting for
+// the provider to fetch the torrent before mpv gets anything at all.
+func SortStreams(streams []Stream, preferred string, cachedFirst bool) []Stream {
 	pref := strings.ToUpper(preferred)
+
+	score := func(s Stream) (int, int) {
+		cache := 0
+		if cachedFirst {
+			cache = streamCached(s)
+		}
+		quality := 0
+		if pref != "" && strings.Contains(strings.ToUpper(s.Name+s.Title), pref) {
+			quality = 1
+		}
+		return cache, quality
+	}
+
 	sort.SliceStable(streams, func(i, j int) bool {
-		iMatch := strings.Contains(strings.ToUpper(streams[i].Name+streams[i].Title), pref)
-		jMatch := strings.Contains(strings.ToUpper(streams[j].Name+streams[j].Title), pref)
-		return iMatch && !jMatch
+		ci, qi := score(streams[i])
+		cj, qj := score(streams[j])
+		if ci != cj {
+			return ci > cj
+		}
+		return qi > qj
 	})
 	return streams
 }
