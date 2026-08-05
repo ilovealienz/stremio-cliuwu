@@ -1,132 +1,151 @@
 # stremio-cliuwu
 
-A terminal Stremio client. Bubble Tea TUI, mpv for playback, no account.
-
-## What changed in 0.3.0
-
-**Catalogs and search come from your addons.** Browsing used to hit Cinemeta's
-`top.json` and four fixed Kitsu catalog IDs; search hit three hardcoded URLs.
-Installing an addon could not add a catalog or extend search. Now the menu is
-built from `catalogs[]` in the installed manifests, and search fans out across
-every catalog whose `extra` declares `search` support.
-
-`movies` / `shows` / `anime` still exist as entry points and still take
-`m`/`s`/`a`, but they now list the catalogs of that type — skipping straight
-into it when there's only one. Buckets with no catalogs behind them are hidden.
-
-Meta lookups follow the same rule: instead of guessing between Cinemeta and
-Kitsu from a source tag, we ask whichever addons declare a `meta` resource for
-that id. Catalog rows also read `releaseInfo` directly rather than firing one
-HTTP request per row just to display a year.
-
-**Cached debrid streams sort first.** Torrentio marks instantly-available
-results with `⚡` and a `[RD+]`-style tag; `⏳` means it would have to download
-first. Picking an uncached result means waiting on the provider before mpv gets
-anything, so cached beats resolution in the sort order. Toggleable.
-
-**Stream cache expires.** It was an unbounded map with no TTL, so a debrid URL
-resolved an hour ago would be replayed after the provider had already expired
-it. Now 5 minutes, capped, with `R` on the stream screen to force a refetch.
-
-**Finishing an episode opens the next one's stream list** rather than picking a
-stream itself. The player can't tell cached from uncached, and a blind pick
-that fails left you with an error toast and no list to retry from.
-
-## What changed in 0.2.0
-
-**No login.** The Stremio account is gone — no `api.strem.io`, no authKey, no
-argon2id vault, no machine-bound encryption. You add addons the same way you'd
-add them in Stremio: by manifest URL.
+A terminal Stremio client. Browse your addons' catalogs, pick a stream, and it
+plays in mpv. Keeps track of what you've watched and where you got to.
 
 ```
-https://v3-cinemeta.strem.io/manifest.json
-https://torrentio.strem.fun/torbox=<your-key>/manifest.json
+┌────────────────────────────────────────────────────┐
+│  stremio-cliuwu › movies                           │
+│                                                    │
+│  Cinemeta                                          │
+│  ▌ Popular                            searchable   │
+│    Featured                                        │
+│                                                    │
+│  Torrentio                                         │
+│    Torrentio Movies                                │
+└────────────────────────────────────────────────────┘
 ```
 
-Cinemeta and Kitsu are seeded on first run. Everything else is yours to add
-from the `addons` screen (`a` to add, `t` to enable/disable, `J`/`K` to reorder
-— stream results are grouped in list order).
+## Install
 
-Those URLs often embed a debrid API key, so `addons.json` is written `0600` and
-the TUI redacts keys when it displays a URL.
-
-**mpv uses `replace`, not `append-play`.** The old client appended to an mpv
-playlist and then had to work out what was playing by asking mpv for its
-current path and matching it against a URL→videoID map. With `replace` there's
-exactly one file loaded, so the playing item is a single struct field, and
-position/watched tracking has nothing to guess at.
-
-The tradeoff: mpv's playlist was doing next-episode autoplay for free. That now
-lives in Go — on `end-file` with `reason: eof` the player resolves the next
-episode's streams and issues another `replace`. Toggle it under settings.
-
-**IPC is event-driven.** One persistent connection with a reader goroutine and
-`observe_property` on `time-pos`/`duration`/`pause`/`media-title`/
-`paused-for-cache`, rather than reconnecting once a second to poll five
-properties. Updates arrive as Bubble Tea messages; the status bar is part of
-the normal render tree instead of raw cursor-save/restore escapes fighting the
-rest of the output.
-
-mpv is spawned with `--no-terminal`. Not optional — we're in the alt screen and
-anything mpv prints to the tty shreds the UI.
-
-## Layout
+Grab a binary from [releases](https://github.com/ilovealienz/stremio-cliuwu/releases),
+or build it yourself:
 
 ```
-main.go              startup, wiring
-app.go               root model, screen stack, chrome, status bar
-list.go              the one list widget everything uses
-widgets.go           spinner, prompt screen, confirm screen
-screens_home.go      main menu + continue watching
-screens_catalog.go   browse / search / results
-screens_series.go    seasons, episodes
-screens_streams.go   stream picker → PlayRequest
-screens_manage.go    favourites, history, addons, settings
-library.go           debrid catalog browsing (DMM / Torrentio cloud)
-player.go            mpv IPC
-addons.go            manifest store + fetching
-api.go               Cinemeta / Kitsu / OMDB
-streams.go           stream label formatting + sorting
-history.go favs.go   persistence
-paths.go config.go   config dir, config load/save, mpv detection
+git clone https://github.com/ilovealienz/stremio-cliuwu
+cd stremio-cliuwu
+go build -o stremio-cliuwu .
 ```
 
-## Keys
+You'll need [mpv](https://mpv.io) installed. That's the only requirement.
 
-Global:
+## First run
 
-| key | |
+Two things to set up, both take a minute.
+
+### 1. Point it at mpv
+
+Open **settings** (press `c` from the main menu) and check the **mpv path**.
+
+Most of the time it'll have found mpv already and you can ignore this. If it
+says `—` or you get "mpv not found", set it manually:
+
+- **Linux / macOS** — usually just leave it blank, `mpv` is on your PATH
+- **Windows** — paste the full path to the exe, something like
+  `C:\Users\YourName\mpv\mpv.exe` or `C:\Program Files\mpv\mpv.exe`
+
+### 2. Add your addons
+
+Cinemeta and Kitsu come pre-installed so you can browse straight away, but you
+need a **stream addon** (Torrentio, etc) before anything will actually play.
+
+To get an addon's URL:
+
+1. Go to [web.stremio.com/#/addons](https://web.stremio.com/#/addons)
+2. Find the addon you want, hit **Share**
+3. Copy the link it gives you
+
+Then in stremio-cliuwu:
+
+1. Press `A` (shift+A) for the **addons** screen
+2. Press `a` to add
+3. Paste it — `ctrl+shift+v` on Linux, `ctrl+v` on Windows
+4. Enter
+
+That's it. Press `r` if you want to re-check that they all loaded.
+
+Addon order matters — stream results are grouped in the order listed, so put
+your favourite on top with `J` / `K`.
+
+> Addon URLs often have your debrid API key baked into them, so treat
+> `addons.json` like a password file. The app blurs the key when it shows a URL
+> and writes the file `0600`.
+
+## Getting around
+
+Arrow keys and enter get you everywhere. The footer always shows what the
+current screen can do.
+
+| | |
 |---|---|
-| `space` | pause / unpause |
-| `,` `.` | seek ∓10s |
-| `<` `>` | seek ∓60s |
-| `X` | stop |
-| `b` | back one screen |
+| arrow keys | move up and down, left and right to page |
+| `enter` | open |
+| `b` or `esc` | back |
+| `/` | filter the list |
+| `0-9` | jump straight to a numbered stream |
+| `tab` | switch provider / category |
+| `X` | stop mpv |
 | `ctrl+q` | quit |
 
-Lists: `j`/`k` or arrows, `g`/`G`, `ctrl+u`/`ctrl+d`, `/` to filter, `enter` to
-open, `b` or `esc` to go back, `q` back to the menu.
+If you're a vim person, `j` `k` `g` `G` and `ctrl+u` `ctrl+d` work too.
 
-mpv is closed when you quit. Turn that off under settings if you'd rather
-playback survive the TUI.
+From the main menu you can jump straight to things: `m` movies, `s` shows,
+`a` anime, `d` library, `/` search, `f` favourites, `h` history, `A` addons,
+`c` settings, `w` continue watching.
 
-Screen-specific hints are in the footer.
+On an episode list, `w` marks one watched and `W` does the whole season.
+
+Pause and seek aren't bound — do that in the mpv window, it's right there.
+
+## Bits worth knowing
+
+**Cached streams float to the top.** Torrentio marks instantly-available
+debrid results with `⚡`. Uncached ones need downloading first, so they get
+sorted below. Turn it off in settings if you'd rather not.
+
+**It picks up where you left off.** Continue watching is on the main menu, and
+selecting something you've partly watched asks whether to resume or start over.
+
+**Next episode loads itself.** About three quarters of the way through, it
+fetches the next episode's streams and puts them on screen — so when the
+current one ends you just pick and go.
+
+## Heads up
+
+I daily drive this on Linux, so that's what gets the most use. Windows works
+fine as far as I can tell, it just doesn't get tested as much — if you hit
+something odd there, [open an issue](https://github.com/ilovealienz/stremio-cliuwu/issues)
+and I'll take a look.
+
+Worth knowing on Windows: use Windows Terminal rather than the old `cmd`
+console, otherwise some of the characters come out as boxes.
+
+And one that isn't a bug — debrid links expire after a while. If a stream won't
+open, press `R` on the stream list to fetch fresh ones.
 
 ## Config
 
-`~/.config/stremio-cliuwu/` (or `$XDG_CONFIG_HOME`, or `%APPDATA%`):
+Lives in `~/.config/stremio-cliuwu/` (or `%APPDATA%\stremio-cliuwu\`):
 
-| file | |
+| | |
 |---|---|
-| `config.json` | mpv path, preferred quality, subtitle lang, autoplay |
-| `addons.json` | manifest URLs — mode 0600, treat as secrets |
+| `config.json` | mpv path, quality preference, toggles |
+| `addons.json` | your addon URLs |
 | `favourites.json` | |
 | `history.json` | positions and watched state |
 
-## Build
+Everything in `config.json` is editable from the settings screen, so you
+shouldn't need to touch these by hand.
 
-```
-make run      # go mod tidy && go run .
-make build
-make install
-```
+## 3.0
+
+Rewritten in [Bubble Tea](https://github.com/charmbracelet/bubbletea).
+
+Also dropped the Stremio account login — it used to sign in and pull your addon
+list down, now you just paste the URLs in. Catalogs and search come from your
+installed addons rather than being hardcoded, so adding an addon actually adds
+something to browse.
+
+## Licence
+
+MIT
