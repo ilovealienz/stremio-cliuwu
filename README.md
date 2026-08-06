@@ -7,19 +7,6 @@ plays in mpv. Keeps track of what you've watched and where you got to.
 
 CLICK SCREENSHOT FOR VIDEO DEMO
 
-```
-┌────────────────────────────────────────────────────┐
-│  stremio-cliuwu › movies                           │
-│                                                    │
-│  Cinemeta                                          │
-│  ▌ Popular                            searchable   │
-│    Featured                                        │
-│                                                    │
-│  Torrentio                                         │
-│    Torrentio Movies                                │
-└────────────────────────────────────────────────────┘
-```
-
 ## Install
 
 Grab a binary from [releases](https://github.com/ilovealienz/stremio-cliuwu/releases),
