@@ -32,6 +32,12 @@ type listModel struct {
 	// Wrap rolls the cursor between the ends instead of stopping dead.
 	Wrap bool
 
+	// ordOf maps a view row to its 1-based number (0 for headers), byOrd goes
+	// the other way. Without these, section headers would consume numbers and
+	// the visible labels would skip.
+	ordOf []int
+	byOrd []int
+
 	Empty string
 }
 
@@ -93,6 +99,8 @@ func (l *listModel) Focus(abs int) {
 
 func (l *listModel) reindex() {
 	l.view = l.view[:0]
+	l.ordOf = l.ordOf[:0]
+	l.byOrd = l.byOrd[:0]
 	q := strings.ToLower(strings.TrimSpace(l.query))
 	for i, it := range l.items {
 		if q == "" {
@@ -106,6 +114,15 @@ func (l *listModel) reindex() {
 		hay := strings.ToLower(stripANSI(it.Label + " " + it.Sub + " " + it.Badge))
 		if strings.Contains(hay, q) {
 			l.view = append(l.view, i)
+		}
+	}
+
+	for vi, ai := range l.view {
+		if l.items[ai].selectable() {
+			l.byOrd = append(l.byOrd, vi)
+			l.ordOf = append(l.ordOf, len(l.byOrd))
+		} else {
+			l.ordOf = append(l.ordOf, 0)
 		}
 	}
 }
@@ -346,18 +363,18 @@ func (l *listModel) page(dir int) {
 func (l *listModel) pushDigit(d string) {
 	cand := l.numBuf + d
 	n, err := strconv.Atoi(cand)
-	if err != nil || n > len(l.view) {
+	if err != nil || n > len(l.byOrd) {
 		cand = d
 		n, err = strconv.Atoi(cand)
 		if err != nil {
 			return
 		}
 	}
-	if n < 1 || n > len(l.view) {
+	if n < 1 || n > len(l.byOrd) {
 		return
 	}
 	l.numBuf = cand
-	l.cursor = n - 1
+	l.cursor = l.byOrd[n-1]
 	l.scrollIntoView()
 }
 
@@ -444,7 +461,11 @@ func (l *listModel) row(vi int, selected bool) string {
 		if it.Label == "" {
 			return ""
 		}
-		return " " + stSection.Render(it.Label)
+		pad := ""
+		if l.Numbered {
+			pad = "    " // keep section labels aligned with the number column
+		}
+		return " " + pad + stSection.Render(it.Label)
 	}
 
 	marker := "  "
@@ -454,10 +475,15 @@ func (l *listModel) row(vi int, selected bool) string {
 
 	num := ""
 	if l.Numbered {
-		num = stKey.Render(fmt.Sprintf("%3d ", vi+1))
-		if selected {
-			num = stCursor.Render(fmt.Sprintf("%3d ", vi+1))
+		n := 0
+		if vi < len(l.ordOf) {
+			n = l.ordOf[vi]
 		}
+		style := stKey
+		if selected {
+			style = stCursor
+		}
+		num = style.Render(fmt.Sprintf("%3d ", n))
 	}
 
 	tick := "  "

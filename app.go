@@ -45,6 +45,12 @@ type screen interface {
 	Typing() bool // suppress global single-key bindings
 }
 
+// backHandler lets a screen consume the global back key for its own internal
+// navigation instead of being popped off the stack.
+type backHandler interface {
+	HandleBack() bool
+}
+
 // baseScreen supplies the boring half of the interface.
 type baseScreen struct{ w, h int }
 
@@ -194,6 +200,12 @@ func (a *app) globalKey(k tea.KeyMsg) (tea.Cmd, bool) {
 	switch k.String() {
 	case "b":
 		// Back, from anywhere. Typing() above keeps this out of text fields.
+		//
+		// A screen with its own internal hierarchy — the folder browser — gets
+		// first refusal, so `b` walks up a directory before leaving.
+		if bh, ok := a.top().(backHandler); ok && bh.HandleBack() {
+			return nil, true
+		}
 		if len(a.stack) > 1 {
 			return pop(), true
 		}

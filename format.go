@@ -144,3 +144,43 @@ func progressBar(frac float64, w int) string {
 	return stBarFill.Render(strings.Repeat("━", fill)) +
 		stBarRest.Render(strings.Repeat("━", w-fill))
 }
+
+// naturalLess compares strings with embedded numbers the way a person would:
+// "S01E02" before "S01E10", "Season 2" before "Season 10". A plain string
+// compare puts E10 before E2, which is why a season pack comes out shuffled.
+func naturalLess(a, b string) bool {
+	la, lb := strings.ToLower(a), strings.ToLower(b)
+	i, j := 0, 0
+
+	for i < len(la) && j < len(lb) {
+		ca, cb := la[i], lb[j]
+		da, db := ca >= '0' && ca <= '9', cb >= '0' && cb <= '9'
+
+		if da && db {
+			// Consume both runs of digits and compare them as numbers.
+			si, sj := i, j
+			for i < len(la) && la[i] >= '0' && la[i] <= '9' {
+				i++
+			}
+			for j < len(lb) && lb[j] >= '0' && lb[j] <= '9' {
+				j++
+			}
+			na := strings.TrimLeft(la[si:i], "0")
+			nb := strings.TrimLeft(lb[sj:j], "0")
+			if len(na) != len(nb) {
+				return len(na) < len(nb) // fewer digits = smaller number
+			}
+			if na != nb {
+				return na < nb
+			}
+			continue
+		}
+
+		if ca != cb {
+			return ca < cb
+		}
+		i++
+		j++
+	}
+	return len(la)-i < len(lb)-j
+}

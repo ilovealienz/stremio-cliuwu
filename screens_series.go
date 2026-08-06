@@ -80,7 +80,7 @@ func (s *seasonScreen) SetSize(w, h int) {
 func (s *seasonScreen) Footer() string {
 	return keyHint(
 		[2]string{"enter", "episodes"},
-		[2]string{"f", "favourite"},
+		[2]string{"f", "favourite show"},
 		[2]string{"w", "mark season"},
 		[2]string{"b/esc", "back"},
 	) + "   " + stHint.Render(s.list.Status())
@@ -156,13 +156,14 @@ func (s *seasonScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, push(newEpisodeScreen(s.show, s.sm, s.seasons[i]))
 			}
 		case "f":
-			if i := s.list.Selected(); i >= 0 {
-				AddFav(Favourite{
-					Name: s.show.Name, ID: s.show.ID, Type: s.show.Type,
-					Source: s.show.Source, Year: s.show.Year, Season: s.seasons[i],
-				})
-				return s, toast(fmt.Sprintf("favourited %s S%02d", s.show.Name, s.seasons[i]))
-			}
+			// Favourite what the screen is showing, not what the cursor
+			// happens to be sitting on. Press f inside a season to pin that
+			// season instead.
+			AddFav(Favourite{
+				Name: s.show.Name, ID: s.show.ID, Type: s.show.Type,
+				Source: s.show.Source, Year: s.show.Year,
+			})
+			return s, toast("favourited " + s.show.Name)
 		case "w", "W":
 			if i := s.list.Selected(); i >= 0 {
 				season := s.seasons[i]
@@ -254,6 +255,7 @@ func (s *episodeScreen) SetSize(w, h int) {
 func (s *episodeScreen) Footer() string {
 	return keyHint(
 		[2]string{"enter", "streams"},
+		[2]string{"f", "favourite season"},
 		[2]string{"w", "watched"},
 		[2]string{"W", "whole season"},
 		[2]string{"/", "filter"},
@@ -354,6 +356,12 @@ func (s *episodeScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			}
 			pos, _, _ := GetPositionByEpisode(s.show.ID, s.season, s.eps[i].Episode)
 			return s, push(s.streamFor(i, pos))
+		case "f":
+			AddFav(Favourite{
+				Name: s.show.Name, ID: s.show.ID, Type: s.show.Type,
+				Source: s.show.Source, Year: s.show.Year, Season: s.season,
+			})
+			return s, toast(fmt.Sprintf("favourited %s S%02d", s.show.Name, s.season))
 		case "w":
 			if i := s.list.Selected(); i >= 0 {
 				v := s.eps[i]
