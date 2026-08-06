@@ -228,6 +228,15 @@ func (s *streamScreen) launch(st Stream, resume float64) tea.Cmd {
 	if t.Queue != nil {
 		v := t.Queue.Episodes[t.Queue.Index]
 		entry.Season, entry.Episode, entry.EpTitle = t.Queue.Season, v.Episode, v.Title
+		entry.EpisodeTotal = len(t.Queue.Episodes)
+
+		if t.Queue.HasNext() {
+			n := t.Queue.Episodes[t.Queue.Index+1]
+			entry.NextVideoID = n.ID
+			entry.NextSeason = t.Queue.Season
+			entry.NextEpisode = n.Episode
+			entry.NextTitle = n.Title
+		}
 	}
 
 	return ctx.player.Play(PlayRequest{

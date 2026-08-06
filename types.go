@@ -376,6 +376,15 @@ type HistoryEntry struct {
 	Duration  float64   `json:"duration,omitempty"`
 	Watched   bool      `json:"watched"`
 	WatchedAt time.Time `json:"watched_at"`
+
+	// Recorded when playback starts so the menu can offer the next episode
+	// without a network round trip. Working it out at render time would mean
+	// fetching the season's episode list every time the menu draws.
+	EpisodeTotal int    `json:"episode_total,omitempty"`
+	NextVideoID  string `json:"next_video_id,omitempty"`
+	NextSeason   int    `json:"next_season,omitempty"`
+	NextEpisode  int    `json:"next_episode,omitempty"`
+	NextTitle    string `json:"next_title,omitempty"`
 }
 
 type HistoryList struct {

@@ -20,7 +20,7 @@ type menuScreen struct {
 	baseScreen
 	list    listModel
 	entries []menuEntry
-	resume  *HistoryEntry
+	resume  *ContinueItem
 }
 
 func newMenuScreen() *menuScreen {
@@ -58,29 +58,49 @@ func spacer() menuEntry { return menuEntry{head: " "} }
 
 func (s *menuScreen) rebuild() {
 	s.entries = nil
-	s.resume = LastInProgress()
+	s.resume = ContinueTarget()
 
-	if e := s.resume; e != nil {
-		label := e.Name
+	if c := s.resume; c != nil {
+		e := c.Entry
+
+		what := e.Name
 		if e.Season > 0 && e.Episode > 0 {
-			label += " · " + fmtVideoID(e.VideoID)
+			what += " · " + fmtVideoID(e.VideoID)
 		}
-		entry := *e
-
-		pos, dur := entry.Position, entry.Duration
-		if live := ctx.player.State(); live.Alive && live.VideoID == entry.VideoID && live.Duration > 0 {
-			pos, dur = live.Pos, live.Duration
+		if e.EpTitle != "" {
+			what += " — " + e.EpTitle
 		}
 
+		label := "continue"
+		var detail string
+
+		if c.NextUp {
+			label = "next up"
+			detail = "finished " + c.LastLabel
+			if c.Total > 0 {
+				detail += fmt.Sprintf(" · %d/%d", c.Index, c.Total)
+			}
+		} else {
+			pos, dur := c.Position, c.Duration
+			if live := ctx.player.State(); live.Alive && live.VideoID == e.VideoID && live.Duration > 0 {
+				pos, dur = live.Pos, live.Duration
+			}
+			detail = progressGlyph(pos, dur)
+			if c.Total > 0 && e.Episode > 0 {
+				detail += fmt.Sprintf(" · %d/%d", c.Index, c.Total)
+			}
+		}
+
+		entry := e
 		s.entries = append(s.entries,
 			section("resume"),
 			menuEntry{
 				// Progress sits inline after the title rather than pinned to
 				// the far right, where it read as unrelated to the row.
-				key:  "w",
-				label: "continue",
-				sub:  label + "   ·   " + progressGlyph(pos, dur),
-				open: func() tea.Cmd { return push(resumeScreen(entry)) },
+				key:   "w",
+				label: label,
+				sub:   what + "   ·   " + detail,
+				open:  func() tea.Cmd { return push(resumeScreen(entry)) },
 			},
 			spacer(),
 		)

@@ -63,6 +63,7 @@ func (b *baseScreen) Footer() string   { return "" }
 type pushMsg struct{ s screen }
 type popMsg struct{ n int }
 type popRootMsg struct{}
+type replaceMsg struct{ s screen }
 type toastMsg struct {
 	text  string
 	isErr bool
@@ -74,6 +75,7 @@ func push(s screen) tea.Cmd    { return func() tea.Msg { return pushMsg{s} } }
 func pop() tea.Cmd             { return func() tea.Msg { return popMsg{1} } }
 func popN(n int) tea.Cmd       { return func() tea.Msg { return popMsg{n} } }
 func popRoot() tea.Cmd         { return func() tea.Msg { return popRootMsg{} } }
+func replaceTop(s screen) tea.Cmd { return func() tea.Msg { return replaceMsg{s} } }
 func toast(s string) tea.Cmd   { return func() tea.Msg { return toastMsg{text: s} } }
 func toastErr(s string) tea.Cmd { return func() tea.Msg { return toastMsg{text: s, isErr: true} } }
 
@@ -116,24 +118,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, toast(m.Text)
 
 	case PrefetchNextMsg:
-		t, ok := nextEpisodeTarget(m.Prev)
-		if !ok {
-			return a, nil
-		}
-		return a, tea.Sequence(
-			toast("next up — "+t.Label),
-			push(newStreamScreen(t)),
-		)
+		return a, a.advanceTo(m.Prev, "next up — ")
 
 	case EpisodeEndedMsg:
-		t, ok := nextEpisodeTarget(m.Prev)
-		if !ok {
-			return a, toast("finished — " + m.Prev.Label)
-		}
-		return a, tea.Sequence(
-			toast("next up — "+t.Label),
-			push(newStreamScreen(t)),
-		)
+		return a, a.advanceTo(m.Prev, "next up — ")
 
 	case PlayerErrMsg:
 		if m.Err != nil {
@@ -172,6 +160,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.stack = a.stack[:1]
 		a.resize()
 		return a, nil
+
+	case replaceMsg:
+		m.s.SetSize(a.w, a.bodyHeight())
+		a.stack[len(a.stack)-1] = m.s
+		return a, m.s.Init()
 
 	case reloadAddonsMsg:
 		ctx.refs = LoadAddonRefs()
@@ -219,6 +212,33 @@ func (a *app) globalKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		}
 	}
 	return nil, false
+}
+
+// advanceTo moves on to the next episode.
+//
+// It only takes over the screen if you're already sitting on the stream list
+// for the episode that just played — otherwise you'd get yanked out of the
+// menu, or out of a completely different show, mid-browse. When you're
+// elsewhere the streams are fetched in the background instead, so they're
+// warm when you do go looking, and the menu's "next up" entry points at them.
+func (a *app) advanceTo(prev PlayRequest, prefix string) tea.Cmd {
+	t, ok := nextEpisodeTarget(prev)
+	if !ok {
+		return toast("finished — " + prev.Label)
+	}
+
+	if cur, isStreams := a.top().(*streamScreen); isStreams && cur.target.VideoID == prev.VideoID {
+		return tea.Sequence(
+			toast(prefix+t.Label),
+			replaceTop(newStreamScreen(t)),
+		)
+	}
+
+	addons := ctx.StreamAddons()
+	videoID := t.VideoID
+	go GetStreams(addons, "series", videoID) // warm the cache, don't navigate
+
+	return toast(prefix + t.Label + " · ready when you are")
 }
 
 // quitCmd confirms first when something is playing, since quitting takes mpv

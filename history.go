@@ -18,7 +18,7 @@ var histMu sync.Mutex
 // inProgressCache caches the last in-progress entry so the main menu
 // doesn't hit disk on every render. Invalidated whenever history changes.
 var (
-	inProgressCache *HistoryEntry
+	inProgressCache *ContinueItem
 	inProgressValid bool
 )
 
@@ -75,8 +75,34 @@ func EpisodeStates(showID string) map[[2]int]EpState {
 	return out
 }
 
-// LastInProgress returns the most recent partially-watched entry.
-func LastInProgress() *HistoryEntry {
+// ContinueItem is what the main menu offers you next.
+type ContinueItem struct {
+	Entry    HistoryEntry // what to play
+	Position float64      // 0 when starting fresh
+	Duration float64
+
+	NextUp    bool   // starting the next episode rather than resuming
+	LastLabel string // the episode you just finished, e.g. "S03E12"
+	Index     int    // this episode's number within the season
+	Total     int
+}
+
+func inProgress(e HistoryEntry) bool {
+	if e.Watched || e.Position <= 0 || e.Duration <= 0 {
+		return false
+	}
+	pct := e.Position / e.Duration * 100
+	return pct >= 5 && pct <= 90
+}
+
+// ContinueTarget decides what "continue watching" should offer.
+//
+// Resuming a part-watched episode is the easy case. The one that used to fall
+// through: you finish an episode, so it's no longer "in progress", and the
+// menu would skip past it to whatever unrelated show you'd left half-watched
+// weeks ago. If the most recent thing was a completed episode and you haven't
+// started the next one, offer that instead.
+func ContinueTarget() *ContinueItem {
 	histMu.Lock()
 	defer histMu.Unlock()
 
@@ -84,18 +110,68 @@ func LastInProgress() *HistoryEntry {
 		return inProgressCache
 	}
 	inProgressCache = nil
+	inProgressValid = true
+
 	items := loadLocked().Items
-	for i := range items {
-		e := items[i]
-		if e.Position > 0 && e.Duration > 0 && !e.Watched {
-			if pct := e.Position / e.Duration * 100; pct >= 5 && pct <= 90 {
-				inProgressCache = &e
-				break
-			}
+	if len(items) == 0 {
+		return nil
+	}
+
+	byVideo := map[string]HistoryEntry{}
+	for _, e := range items {
+		if e.VideoID != "" {
+			byVideo[e.VideoID] = e
 		}
 	}
-	inProgressValid = true
-	return inProgressCache
+
+	resume := func(e HistoryEntry) *ContinueItem {
+		return &ContinueItem{
+			Entry: e, Position: e.Position, Duration: e.Duration,
+			Index: e.Episode, Total: e.EpisodeTotal,
+		}
+	}
+
+	// The most recent thing you touched gets first say.
+	top := items[0]
+	if inProgress(top) {
+		inProgressCache = resume(top)
+		return inProgressCache
+	}
+
+	if top.Type == "series" && top.Watched && top.NextVideoID != "" {
+		next, started := byVideo[top.NextVideoID]
+
+		// Already part way into the next one — resume that instead.
+		if started && inProgress(next) {
+			inProgressCache = resume(next)
+			return inProgressCache
+		}
+
+		if !started || !next.Watched {
+			inProgressCache = &ContinueItem{
+				Entry: HistoryEntry{
+					Name: top.Name, ID: top.ID, Type: top.Type,
+					Source: top.Source, Year: top.Year,
+					Season: top.NextSeason, Episode: top.NextEpisode,
+					VideoID: top.NextVideoID, EpTitle: top.NextTitle,
+				},
+				NextUp:    true,
+				LastLabel: fmtVideoID(top.VideoID),
+				Index:     top.NextEpisode,
+				Total:     top.EpisodeTotal,
+			}
+			return inProgressCache
+		}
+	}
+
+	// Otherwise fall back to anything left part-watched.
+	for i := range items {
+		if inProgress(items[i]) {
+			inProgressCache = resume(items[i])
+			return inProgressCache
+		}
+	}
+	return nil
 }
 
 func AddHistory(e HistoryEntry, maxEntries int) {
