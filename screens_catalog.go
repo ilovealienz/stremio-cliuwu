@@ -106,6 +106,75 @@ func (s *catalogPickerScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 func (s *catalogPickerScreen) View() string { return s.list.View() }
 
+// ── Genre picker ──────────────────────────────────────────────────────────────
+
+type genrePickerScreen struct {
+	baseScreen
+	ref    CatalogRef
+	genres []string // "" first when the catalog can be browsed unfiltered
+	list   listModel
+	onPick func(string) tea.Cmd
+}
+
+func newGenrePicker(ref CatalogRef, onPick func(string) tea.Cmd) *genrePickerScreen {
+	l := newList()
+	l.Empty = "this catalog declares no genres"
+
+	genres := []string{}
+	if !ref.NeedsGenre {
+		genres = append(genres, "") // "all genres"
+	}
+	genres = append(genres, ref.Genres...)
+
+	s := &genrePickerScreen{ref: ref, genres: genres, list: l, onPick: onPick}
+
+	items := make([]Item, len(genres))
+	for i, g := range genres {
+		if g == "" {
+			items[i] = Item{Label: bold("all genres")}
+			continue
+		}
+		items[i] = Item{Label: bold(g)}
+	}
+	l.SetItems(items)
+	s.list = l
+	return s
+}
+
+func (s *genrePickerScreen) Init() tea.Cmd  { return nil }
+func (s *genrePickerScreen) Title() string  { return "genre" }
+func (s *genrePickerScreen) Typing() bool   { return s.list.Typing() }
+func (s *genrePickerScreen) Footer() string {
+	return keyHint([2]string{"enter", "choose"}, [2]string{"/", "filter"}, [2]string{"b/esc", "back"}) +
+		"   " + stHint.Render(s.list.Status())
+}
+
+func (s *genrePickerScreen) SetSize(w, h int) {
+	s.baseScreen.SetSize(w, h)
+	s.list.SetSize(w, h)
+}
+
+func (s *genrePickerScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
+	if k, ok := msg.(tea.KeyMsg); ok {
+		if consumed, cmd := s.list.Update(msg); consumed {
+			return s, cmd
+		}
+		switch k.String() {
+		case "enter":
+			if i := s.list.Selected(); i >= 0 {
+				return s, tea.Sequence(pop(), s.onPick(s.genres[i]))
+			}
+		case "esc", "backspace":
+			return s, pop()
+		case "q":
+			return s, popRoot()
+		}
+	}
+	return s, nil
+}
+
+func (s *genrePickerScreen) View() string { return s.list.View() }
+
 // ── Catalog browser ───────────────────────────────────────────────────────────
 
 type catalogPageMsg struct {
@@ -119,6 +188,7 @@ type catalogScreen struct {
 	baseScreen
 	id      asyncID
 	ref     CatalogRef
+	genre   string // "" = every genre
 	metas   []Meta
 	hasMore bool
 
@@ -133,15 +203,36 @@ func newCatalogScreen(ref CatalogRef) *catalogScreen {
 	return &catalogScreen{id: newAsyncID(), ref: ref, list: l, busy: newBusy("loading…")}
 }
 
-func (s *catalogScreen) Init() tea.Cmd { return s.loadPage(0) }
+func (s *catalogScreen) Init() tea.Cmd {
+	// Some addons won't serve a catalog at all without a genre, so ask before
+	// firing off a request that can only fail.
+	if s.ref.NeedsGenre && s.genre == "" && len(s.ref.Genres) > 0 {
+		return push(newGenrePicker(s.ref, func(g string) tea.Cmd {
+			return s.setGenre(g)
+		}))
+	}
+	return s.loadPage(0)
+}
+
+func (s *catalogScreen) setGenre(g string) tea.Cmd {
+	s.genre = g
+	s.metas = nil
+	s.hasMore = false
+	s.list.SetItems(nil)
+	return s.loadPage(0)
+}
 
 func (s *catalogScreen) loadPage(skip int) tea.Cmd {
 	s.id = newAsyncID()
-	id, ref := s.id, s.ref
+	id, ref, genre := s.id, s.ref, s.genre
+	what := ref.Name
+	if genre != "" {
+		what += " · " + genre
+	}
 	return tea.Batch(
-		s.busy.start("loading "+ref.Name+"…"),
+		s.busy.start("loading "+what+"…"),
 		func() tea.Msg {
-			metas, more, err := FetchCatalog(ref, skip)
+			metas, more, err := FetchCatalog(ref, skip, genre)
 			return catalogPageMsg{id: id, metas: metas, hasMore: more, err: err}
 		},
 	)
@@ -157,6 +248,9 @@ func (s *catalogScreen) SetSize(w, h int) {
 
 func (s *catalogScreen) Footer() string {
 	pairs := [][2]string{{"enter", "open"}, {"f", "favourite"}, {"/", "filter"}}
+	if len(s.ref.Genres) > 0 {
+		pairs = append(pairs, [2]string{"g", "genre"})
+	}
 	if s.hasMore {
 		pairs = append(pairs, [2]string{"m", "load more"})
 	}
@@ -189,6 +283,13 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		return s, nil
 
 	case tea.KeyMsg:
+		// Checked before the list sees it: `g` is jump-to-top in the list
+		// widget, which would otherwise swallow it.
+		if m.String() == "g" && len(s.ref.Genres) > 0 {
+			return s, push(newGenrePicker(s.ref, func(g string) tea.Cmd {
+				return s.setGenre(g)
+			}))
+		}
 		if consumed, cmd := s.list.Update(msg); consumed {
 			return s, cmd
 		}
@@ -220,7 +321,13 @@ func (s *catalogScreen) View() string {
 	if !s.loaded {
 		return s.busy.view()
 	}
-	head := "  " + stSub.Render(s.ref.AddonName) + "\n"
+	what := s.ref.AddonName
+	if s.genre != "" {
+		what += "  ·  " + s.genre
+	} else if len(s.ref.Genres) > 0 {
+		what += "  ·  all genres"
+	}
+	head := "  " + stSub.Render(what) + "\n"
 	return head + s.list.View()
 }
 

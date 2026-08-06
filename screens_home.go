@@ -85,7 +85,11 @@ func (s *menuScreen) rebuild() {
 			if live := ctx.player.State(); live.Alive && live.VideoID == e.VideoID && live.Duration > 0 {
 				pos, dur = live.Pos, live.Duration
 			}
-			detail = progressGlyph(pos, dur)
+			if dur > 0 && pos > 0 {
+				detail = progressGlyph(pos, dur)
+			} else {
+				detail = "not started"
+			}
 			if c.Total > 0 && e.Episode > 0 {
 				detail += fmt.Sprintf(" · %d/%d", c.Index, c.Total)
 			}

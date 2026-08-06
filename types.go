@@ -79,21 +79,31 @@ func (c AddonCatalog) Requires(extra string) bool {
 	return false
 }
 
-// Browsable reports whether the catalog can be fetched with no arguments.
-// A catalog that *requires* something like a genre can only be searched into,
-// not listed, so it has no place in the browse picker.
+// Browsable reports whether the catalog can be listed. Genre may be required
+// — several addons only serve a catalog once you've picked one — so those are
+// browsable as long as we ask for a genre first.
 func (c AddonCatalog) Browsable() bool {
 	for _, e := range c.Extra {
-		if e.IsRequired && e.Name != "skip" {
+		if e.IsRequired && e.Name != "skip" && e.Name != "genre" {
 			return false
 		}
 	}
 	for _, e := range c.ExtraRequired {
-		if e != "skip" {
+		if e != "skip" && e != "genre" {
 			return false
 		}
 	}
 	return true
+}
+
+// Genres returns the options declared for the genre extra, if any.
+func (c AddonCatalog) Genres() []string {
+	for _, e := range c.Extra {
+		if e.Name == "genre" {
+			return e.Options
+		}
+	}
+	return nil
 }
 
 // CatalogRef is a catalog bound to the addon that serves it.
@@ -105,6 +115,9 @@ type CatalogRef struct {
 	Name      string
 	Search    bool
 	Skip      bool
+
+	Genres     []string // options for the genre extra, if declared
+	NeedsGenre bool     // the addon won't serve this catalog without one
 }
 
 // Kind buckets a catalog under one of the top-level menu entries.

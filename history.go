@@ -131,9 +131,12 @@ func ContinueTarget() *ContinueItem {
 		}
 	}
 
-	// The most recent thing you touched gets first say.
+	// The most recent thing you touched gets first say, whether or not it has
+	// a position yet. A freshly started episode sits at 0 until the first
+	// position write lands, and skipping it there meant the menu pointed at
+	// some older half-watched thing for the first minute of playback.
 	top := items[0]
-	if inProgress(top) {
+	if !top.Watched {
 		inProgressCache = resume(top)
 		return inProgressCache
 	}
@@ -200,6 +203,9 @@ func AddHistory(e HistoryEntry, maxEntries int) {
 		h.Items = h.Items[:maxEntries]
 	}
 	saveLocked(h)
+	// This changes items[0], which is what ContinueTarget anchors on — without
+	// invalidating, the menu keeps offering whatever it worked out last time.
+	invalidateInProgress()
 }
 
 // UpdatePosition saves playback position. Marks watched at >= 70%.

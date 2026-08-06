@@ -44,13 +44,15 @@ func Catalogs(addons []Addon) []CatalogRef {
 				label = c.ID
 			}
 			out = append(out, CatalogRef{
-				AddonName: name,
-				Base:      base,
-				Type:      c.Type,
-				ID:        c.ID,
-				Name:      label,
-				Search:    c.Supports("search"),
-				Skip:      c.Supports("skip"),
+				AddonName:  name,
+				Base:       base,
+				Type:       c.Type,
+				ID:         c.ID,
+				Name:       label,
+				Search:     c.Supports("search"),
+				Skip:       c.Supports("skip"),
+				Genres:     c.Genres(),
+				NeedsGenre: c.Requires("genre"),
 			})
 		}
 	}
@@ -132,13 +134,27 @@ func sourceOf(catalogType string) string {
 	return catalogType
 }
 
+// catalogURL builds the request, folding optional extras into the path segment
+// the protocol expects: /catalog/{type}/{id}/genre=Action&skip=100.json
+func catalogURL(ref CatalogRef, skip int, genre string) string {
+	var extras []string
+	if genre != "" {
+		extras = append(extras, "genre="+url.QueryEscape(genre))
+	}
+	if skip > 0 && ref.Skip {
+		extras = append(extras, fmt.Sprintf("skip=%d", skip))
+	}
+	if len(extras) == 0 {
+		return fmt.Sprintf("%s/catalog/%s/%s.json", ref.Base, ref.Type, url.PathEscape(ref.ID))
+	}
+	return fmt.Sprintf("%s/catalog/%s/%s/%s.json",
+		ref.Base, ref.Type, url.PathEscape(ref.ID), strings.Join(extras, "&"))
+}
+
 // FetchCatalog pulls one page. skip is ignored by catalogs that don't declare
 // skip support, in which case everything arrives in one response.
-func FetchCatalog(ref CatalogRef, skip int) ([]Meta, bool, error) {
-	u := fmt.Sprintf("%s/catalog/%s/%s.json", ref.Base, ref.Type, url.PathEscape(ref.ID))
-	if skip > 0 && ref.Skip {
-		u = fmt.Sprintf("%s/catalog/%s/%s/skip=%d.json", ref.Base, ref.Type, url.PathEscape(ref.ID), skip)
-	}
+func FetchCatalog(ref CatalogRef, skip int, genre string) ([]Meta, bool, error) {
+	u := catalogURL(ref, skip, genre)
 
 	key := u
 	if v, ok := cacheCatalog.Get(key); ok {
