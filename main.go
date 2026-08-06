@@ -29,6 +29,7 @@ func main() {
 	}
 
 	cfg := LoadConfig()
+	applyAccent(cfg.Accent)
 	if cfg.MpvPath == "" {
 		cfg.MpvPath = detectMpv()
 		SaveConfig(cfg)

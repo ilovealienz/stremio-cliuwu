@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sort"
 	"strings"
 	"time"
 )
@@ -284,19 +285,79 @@ type Stream struct {
 type EpQueue struct {
 	Show     Meta
 	Season   int
-	Episodes []Video
+	Episodes []Video // this season only
 	Index    int
+
+	// All is every episode of the series. Carrying it means the end of a
+	// season isn't the end of the queue — without it, finishing a finale
+	// looked identical to finishing the show.
+	All []Video
 }
 
 func (q *EpQueue) HasPrev() bool { return q != nil && q.Index > 0 }
-func (q *EpQueue) HasNext() bool { return q != nil && q.Index < len(q.Episodes)-1 }
+
+func (q *EpQueue) HasNext() bool {
+	_, _, ok := q.Next()
+	return ok
+}
+
+// Next returns the following episode and its season, rolling over into the
+// next season when the current one runs out.
+func (q *EpQueue) Next() (Video, int, bool) {
+	if q == nil {
+		return Video{}, 0, false
+	}
+	if q.Index+1 < len(q.Episodes) {
+		v := q.Episodes[q.Index+1]
+		if !videoAired(v) {
+			return Video{}, 0, false // not out yet — nothing to queue
+		}
+		return v, q.Season, true
+	}
+
+	// Lowest season above this one…
+	next := -1
+	for _, v := range q.All {
+		if v.Season > q.Season && (next == -1 || v.Season < next) {
+			next = v.Season
+		}
+	}
+	if next == -1 {
+		return Video{}, 0, false
+	}
+
+	// …and its earliest episode.
+	var first Video
+	found := false
+	for _, v := range q.All {
+		if v.Season == next && (!found || v.Episode < first.Episode) {
+			first, found = v, true
+		}
+	}
+	if found && !videoAired(first) {
+		return Video{}, 0, false
+	}
+	return first, next, found
+}
+
+// SeasonEpisodes pulls one season's episodes out of All, in order.
+func (q *EpQueue) SeasonEpisodes(season int) []Video {
+	var eps []Video
+	for _, v := range q.All {
+		if v.Season == season {
+			eps = append(eps, v)
+		}
+	}
+	sort.Slice(eps, func(a, b int) bool { return eps[a].Episode < eps[b].Episode })
+	return eps
+}
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
 // configVersion is bumped whenever a new field needs a non-zero default.
 // Without this, adding a bool to the struct silently gives every existing
 // install `false`, because encoding/json just leaves absent fields alone.
-const configVersion = 2
+const configVersion = 3
 
 type AppConfig struct {
 	Version          int    `json:"version"`
@@ -309,6 +370,7 @@ type AppConfig struct {
 	AutoResume       bool   `json:"auto_resume"`
 	CloseMpvOnExit   bool   `json:"close_mpv_on_exit"`
 	CachedFirst      bool   `json:"cached_first"`
+	Accent           string `json:"accent"`
 }
 
 // SetDefaults fills in anything missing. Returns true if it changed something,
@@ -328,6 +390,11 @@ func (c *AppConfig) SetDefaults() bool {
 
 	if c.Version < 2 {
 		c.CachedFirst = true
+		changed = true
+	}
+
+	if c.Version < 3 {
+		c.Accent = "pink"
 		changed = true
 	}
 

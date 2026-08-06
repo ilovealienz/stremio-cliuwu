@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -388,6 +389,8 @@ func (s *settingsScreen) rebuild() {
 		{Label: bold("ask to resume"), Sub: "off always starts from the beginning", Badge: onOff(c.AutoResume)},
 		{Label: bold("close mpv on exit"), Sub: "off leaves playback running after you quit", Badge: onOff(c.CloseMpvOnExit)},
 		{Label: bold("cached streams first"), Sub: "float instantly-available debrid results", Badge: onOff(c.CachedFirst)},
+		{Label: bold("accent colour"), Sub: "used for highlights, rules and the cursor",
+			Badge: accentSwatch(c.Accent) + "  " + orDash(c.Accent)},
 	})
 }
 
@@ -449,6 +452,17 @@ func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			case 8:
 				ctx.cfg.CachedFirst = !ctx.cfg.CachedFirst
 				return s, s.save()
+			case 9:
+				return s, push(newPrompt("accent colour", "pink", ctx.cfg.Accent, func(v string) tea.Cmd {
+					ctx.cfg.Accent = v
+					applyAccent(v)
+					// Restyling isn't enough on its own — already-rendered
+					// rows hold the old escape codes.
+					return tea.Batch(s.save(), themeChanged())
+				},
+					"presets: "+strings.Join(accentOrder, " "),
+					"or a hex value like #ff8800, or a terminal colour 0-255",
+				))
 			}
 		case "esc", "backspace":
 			return s, pop()

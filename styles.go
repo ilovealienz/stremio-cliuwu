@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
@@ -32,7 +33,7 @@ func grey(s string) string   { return cGrey + s + cReset }
 func good(s string) string   { return cGreen + s + cReset }
 func bad(s string) string    { return cRed + s + cReset }
 func hi(s string) string     { return cCyan + s + cReset }
-func accent(s string) string { return cMagenta + s + cReset }
+func accent(s string) string { return stAccentText.Render(s) }
 func white(s string) string  { return cWhite + s + cReset }
 func yell(s string) string   { return cYellow + s + cReset }
 func blue(s string) string   { return cBlue + s + cReset }
@@ -66,6 +67,8 @@ func tw() int {
 
 // ── lipgloss ──────────────────────────────────────────────────────────────────
 
+// ── Theme ─────────────────────────────────────────────────────────────────────
+
 var (
 	clAccent = lipgloss.Color("13")
 	clGrey   = lipgloss.Color("240")
@@ -76,25 +79,91 @@ var (
 	clCyan   = lipgloss.Color("14")
 )
 
+// accentPresets are the named colours offered in settings. Anything else is
+// passed through to lipgloss, so "#ff8800" or a 0-255 terminal index works too.
+var accentPresets = map[string]string{
+	"pink":   "13",
+	"purple": "99",
+	"blue":   "12",
+	"cyan":   "14",
+	"teal":   "43",
+	"green":  "10",
+	"lime":   "118",
+	"yellow": "11",
+	"orange": "208",
+	"red":    "9",
+	"grey":   "245",
+	"white":  "15",
+}
+
+var accentOrder = []string{
+	"pink", "purple", "blue", "cyan", "teal",
+	"green", "lime", "yellow", "orange", "red", "grey", "white",
+}
+
+// resolveAccent turns a config value into a colour. Unknown values fall back
+// to pink rather than rendering as unstyled text.
+func resolveAccent(name string) lipgloss.Color {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if name == "" {
+		return lipgloss.Color("13")
+	}
+	if v, ok := accentPresets[name]; ok {
+		return lipgloss.Color(v)
+	}
+	if strings.HasPrefix(name, "#") && (len(name) == 7 || len(name) == 4) {
+		return lipgloss.Color(name)
+	}
+	if n, err := strconv.Atoi(name); err == nil && n >= 0 && n <= 255 {
+		return lipgloss.Color(name)
+	}
+	return lipgloss.Color("13")
+}
+
 var (
 	stTitle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
-	stBrand = lipgloss.NewStyle().Bold(true).Foreground(clAccent)
-	stCrumb   = lipgloss.NewStyle().Foreground(clDim)
-	stSection = lipgloss.NewStyle().Foreground(clAccent).Bold(true)
-	stRule  = lipgloss.NewStyle().Foreground(clAccent)
+	stCrumb = lipgloss.NewStyle().Foreground(clDim)
+	stSub   = lipgloss.NewStyle().Foreground(clDim)
+	stHint  = lipgloss.NewStyle().Foreground(clGrey)
+	stErr   = lipgloss.NewStyle().Foreground(clRed)
+	stOK    = lipgloss.NewStyle().Foreground(clGreen)
+	stWarn  = lipgloss.NewStyle().Foreground(clYellow)
+	stToast = lipgloss.NewStyle().Foreground(clCyan)
 
-	stCursor   = lipgloss.NewStyle().Foreground(clAccent).Bold(true)
 	stSelected = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
-	stSub      = lipgloss.NewStyle().Foreground(clDim)
-	stHint     = lipgloss.NewStyle().Foreground(clGrey)
-	stKey      = lipgloss.NewStyle().Foreground(clAccent)
-	stErr      = lipgloss.NewStyle().Foreground(clRed)
-	stOK       = lipgloss.NewStyle().Foreground(clGreen)
-	stWarn     = lipgloss.NewStyle().Foreground(clYellow)
-	stBarFill  = lipgloss.NewStyle().Foreground(clAccent)
 	stBarRest  = lipgloss.NewStyle().Foreground(clGrey)
-	stToast    = lipgloss.NewStyle().Foreground(clCyan)
+
+	// Everything below is rebuilt by applyAccent.
+	stBrand      lipgloss.Style
+	stRule       lipgloss.Style
+	stCursor     lipgloss.Style
+	stKey        lipgloss.Style
+	stSection    lipgloss.Style
+	stBarFill    lipgloss.Style
+	stAccentText lipgloss.Style
 )
+
+func init() { applyAccent("") }
+
+// applyAccent restyles everything that uses the accent colour. Called at
+// startup and again whenever the setting changes, so the change is live
+// without a restart.
+func applyAccent(name string) {
+	clAccent = resolveAccent(name)
+
+	stBrand = lipgloss.NewStyle().Bold(true).Foreground(clAccent)
+	stRule = lipgloss.NewStyle().Foreground(clAccent)
+	stCursor = lipgloss.NewStyle().Foreground(clAccent).Bold(true)
+	stKey = lipgloss.NewStyle().Foreground(clAccent)
+	stSection = lipgloss.NewStyle().Foreground(clAccent).Bold(true)
+	stBarFill = lipgloss.NewStyle().Foreground(clAccent)
+	stAccentText = lipgloss.NewStyle().Foreground(clAccent)
+}
+
+// accentSwatch renders a small preview block in the given colour.
+func accentSwatch(name string) string {
+	return lipgloss.NewStyle().Foreground(resolveAccent(name)).Render("███")
+}
 
 // keyHint renders "k=label" pairs for the footer.
 func keyHint(pairs ...[2]string) string {

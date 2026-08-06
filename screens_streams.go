@@ -230,10 +230,9 @@ func (s *streamScreen) launch(st Stream, resume float64) tea.Cmd {
 		entry.Season, entry.Episode, entry.EpTitle = t.Queue.Season, v.Episode, v.Title
 		entry.EpisodeTotal = len(t.Queue.Episodes)
 
-		if t.Queue.HasNext() {
-			n := t.Queue.Episodes[t.Queue.Index+1]
+		if n, season, ok := t.Queue.Next(); ok {
 			entry.NextVideoID = n.ID
-			entry.NextSeason = t.Queue.Season
+			entry.NextSeason = season
 			entry.NextEpisode = n.Episode
 			entry.NextTitle = n.Title
 		}
@@ -272,14 +271,30 @@ func (s *streamScreen) play(st Stream) tea.Cmd {
 	))
 }
 
-// nextEpisodeTarget advances a finished request's queue by one.
+// nextEpisodeTarget advances a finished request's queue by one, continuing
+// into the next season when the current one is done.
 func nextEpisodeTarget(prev PlayRequest) (streamTarget, bool) {
-	if prev.Queue == nil || !prev.Queue.HasNext() {
+	v, season, ok := prev.Queue.Next()
+	if !ok {
 		return streamTarget{}, false
 	}
+
 	q := *prev.Queue
-	q.Index++
-	v := q.Episodes[q.Index]
+	if season != q.Season {
+		// Rebuild the queue around the new season so autoplay keeps working
+		// past the boundary rather than stopping after one episode.
+		q.Season = season
+		q.Episodes = q.SeasonEpisodes(season)
+		q.Index = 0
+		for i, e := range q.Episodes {
+			if e.ID == v.ID {
+				q.Index = i
+				break
+			}
+		}
+	} else {
+		q.Index++
+	}
 
 	return streamTarget{
 		Meta:      q.Show,

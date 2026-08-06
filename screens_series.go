@@ -90,23 +90,34 @@ func (s *seasonScreen) rebuild() {
 	states := EpisodeStates(s.show.ID)
 	items := make([]Item, len(s.seasons))
 	for i, season := range s.seasons {
-		total, done := 0, 0
+		total, done, upcoming := 0, 0, 0
 		for _, v := range s.sm.Videos {
-			if v.Season == season {
-				total++
-				if states[[2]int{season, v.Episode}].Watched {
-					done++
-				}
+			if v.Season != season {
+				continue
+			}
+			total++
+			if states[[2]int{season, v.Episode}].Watched {
+				done++
+			}
+			if !videoAired(v) {
+				upcoming++
 			}
 		}
+
+		// A season part way through its run would otherwise sit at 6/10
+		// forever and look like you'd abandoned it.
+		aired := total - upcoming
 		badge := grey(fmt.Sprintf("%d/%d", done, total))
-		if done == total && total > 0 {
-			badge = good(fmt.Sprintf("%d/%d ✓", done, total))
+		if done == aired && aired > 0 {
+			badge = good(fmt.Sprintf("%d/%d ✓", done, aired))
+		}
+		if upcoming > 0 {
+			badge += "  " + stWarn.Render(fmt.Sprintf("+%d upcoming", upcoming))
 		}
 		items[i] = Item{
 			Label:   bold(fmt.Sprintf("season %d", season)),
 			Badge:   badge,
-			Watched: total > 0 && done == total,
+			Watched: aired > 0 && done == aired,
 		}
 	}
 	s.list.SetItems(items)
@@ -416,7 +427,10 @@ func (s *episodeScreen) streamFor(i int, resume float64) screen {
 		VideoID:   v.ID,
 		Label:     s.show.Name + " · " + fmtVideoID(v.ID),
 		Resume:    resume,
-		Queue:     &EpQueue{Show: s.show, Season: s.season, Episodes: s.eps, Index: i},
+		Queue: &EpQueue{
+			Show: s.show, Season: s.season, Episodes: s.eps, Index: i,
+			All: s.sm.Videos,
+		},
 	})
 }
 

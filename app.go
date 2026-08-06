@@ -71,6 +71,20 @@ type toastMsg struct {
 type toastExpireMsg struct{ at time.Time }
 type reloadAddonsMsg struct{}
 
+// themeChangedMsg forces every screen to re-render its rows.
+//
+// Screens bake styled text into Item.Label when they build their list, so
+// swapping the accent styles doesn't touch strings that were rendered
+// earlier — the menu would keep its old colour until you navigated away and
+// back. Section headers updated immediately because those are rendered live
+// in the row painter, which is what made the inconsistency visible.
+type themeChangedMsg struct{}
+
+func themeChanged() tea.Cmd { return func() tea.Msg { return themeChangedMsg{} } }
+
+// rebuildable is any screen that can regenerate its rows on demand.
+type rebuildable interface{ rebuild() }
+
 func push(s screen) tea.Cmd    { return func() tea.Msg { return pushMsg{s} } }
 func pop() tea.Cmd             { return func() tea.Msg { return popMsg{1} } }
 func popN(n int) tea.Cmd       { return func() tea.Msg { return popMsg{n} } }
@@ -165,6 +179,14 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.s.SetSize(a.w, a.bodyHeight())
 		a.stack[len(a.stack)-1] = m.s
 		return a, m.s.Init()
+
+	case themeChangedMsg:
+		for _, sc := range a.stack {
+			if r, ok := sc.(rebuildable); ok {
+				r.rebuild()
+			}
+		}
+		return a, nil
 
 	case reloadAddonsMsg:
 		ctx.refs = LoadAddonRefs()

@@ -20,9 +20,10 @@ func fmtSecs(s float64) string {
 	return fmt.Sprintf("%02d:%02d", m, sec)
 }
 
-func fmtRelease(s string) string {
+// parseRelease reads the assorted date formats the metadata addons emit.
+func parseRelease(s string) (time.Time, bool) {
 	if s == "" || s == "N/A" {
-		return ""
+		return time.Time{}, false
 	}
 	for _, layout := range []string{
 		"2006-01-02",
@@ -32,15 +33,37 @@ func fmtRelease(s string) string {
 		"Jan 2, 2006",
 		time.RFC3339,
 	} {
-		if t, err := time.Parse(layout, s); err == nil {
-			// Reject the Unix epoch — means the field was unset
-			if t.IsZero() || (t.Year() == 1970 && t.Month() == 1 && t.Day() == 1) {
-				return ""
-			}
-			return t.Format("Mon 02/01/06")
+		t, err := time.Parse(layout, s)
+		if err != nil {
+			continue
 		}
+		// Reject the Unix epoch — means the field was unset
+		if t.IsZero() || (t.Year() == 1970 && t.Month() == 1 && t.Day() == 1) {
+			return time.Time{}, false
+		}
+		return t, true
 	}
-	return ""
+	return time.Time{}, false
+}
+
+func fmtRelease(s string) string {
+	t, ok := parseRelease(s)
+	if !ok {
+		return ""
+	}
+	return t.Format("Mon 02/01/06")
+}
+
+// videoAired reports whether an episode's release date has passed. An
+// unparseable or missing date counts as aired — plenty of catalogs leave it
+// blank, and refusing to play those would be worse than the occasional
+// unaired entry slipping through.
+func videoAired(v Video) bool {
+	t, ok := parseRelease(v.Released)
+	if !ok {
+		return true
+	}
+	return !t.After(time.Now())
 }
 
 // fmtVideoID turns "tt1234:2:5" or "kitsu:123:7" into "S02E05".
@@ -113,12 +136,22 @@ func epItem(v Video, watched bool) Item {
 	if r := fmtRelease(v.Released); r != "" {
 		badge = grey(r)
 	}
-	return Item{
+
+	it := Item{
 		Label:   bold(hi(fmt.Sprintf("E%02d", v.Episode))),
 		Sub:     v.Title,
 		Badge:   badge,
 		Watched: watched,
 	}
+
+	// Catalogs list episodes well before they air. Without a marker they look
+	// identical to everything else, and you only find out when the stream
+	// search comes back empty.
+	if !videoAired(v) {
+		it.Badge = stWarn.Render("○ airs " + fmtRelease(v.Released))
+		it.Dim = true
+	}
+	return it
 }
 
 // progressGlyph renders a compact "12:34 / 45:00 (27%)" style readout.
