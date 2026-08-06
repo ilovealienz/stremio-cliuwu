@@ -5,6 +5,8 @@ plays in mpv. Keeps track of what you've watched and where you got to.
 
 [![Watch the demo](preview/screenshot.png)](https://o3o.lol/PfG3bI.mp4)
 
+CLICK SCREENSHOT FOR VIDEO DEMO
+
 ```
 ┌────────────────────────────────────────────────────┐
 │  stremio-cliuwu › movies                           │
