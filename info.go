@@ -209,9 +209,13 @@ func (p *infoPane) View() string {
 		lines = append(lines, "")
 	}
 
+	// Every line is terminated explicitly. Poster rows carry truecolor
+	// background escapes, and clamp can drop a trailing reset that sits past
+	// the content width — the colour then bleeds onto the next terminal line,
+	// which is a list row, and it renders in the leaked style.
 	pad := strings.Repeat(" ", p.indent)
 	for i, l := range lines {
-		lines[i] = pad + clamp(l, p.w)
+		lines[i] = pad + clamp(l, p.w) + cReset
 	}
 
 	// Scroll position on the last row, so it's obvious there's more.
@@ -369,7 +373,7 @@ func padBlock(block string, w int) string {
 		if pad := w - lipgloss.Width(l); pad > 0 {
 			l += strings.Repeat(" ", pad)
 		}
-		lines[i] = l
+		lines[i] = l + cReset
 	}
 	return strings.Join(lines, "\n")
 }
