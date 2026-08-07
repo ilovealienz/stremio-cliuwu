@@ -391,6 +391,9 @@ func (s *settingsScreen) rebuild() {
 		{Label: bold("cached streams first"), Sub: "float instantly-available debrid results", Badge: onOff(c.CachedFirst)},
 		{Label: bold("accent colour"), Sub: "used for highlights, rules and the cursor",
 			Badge: accentSwatch(c.Accent) + "  " + orDash(c.Accent)},
+		{Label: bold("auto-open info panel"), Sub: "on wide terminals · i toggles it anyway",
+			Badge: onOff(c.AutoInfo)},
+		{Label: bold("posters"), Sub: "block art in the info panel · looks rough, be warned", Badge: onOff(c.Posters)},
 	})
 }
 
@@ -451,6 +454,12 @@ func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, s.save()
 			case 8:
 				ctx.cfg.CachedFirst = !ctx.cfg.CachedFirst
+				return s, s.save()
+			case 10:
+				ctx.cfg.AutoInfo = !ctx.cfg.AutoInfo
+				return s, s.save()
+			case 11:
+				ctx.cfg.Posters = !ctx.cfg.Posters
 				return s, s.save()
 			case 9:
 				return s, push(newPrompt("accent colour", "pink", ctx.cfg.Accent, func(v string) tea.Cmd {

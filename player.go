@@ -57,8 +57,8 @@ type EpisodeEndedMsg struct{ Prev PlayRequest }
 // episode's streams are resolved and on screen while you're still watching.
 type PrefetchNextMsg struct{ Prev PlayRequest }
 
-// prefetchAt is the fraction of an episode after which we look ahead.
-const prefetchAt = 0.75
+// How far before the end to look ahead is worked out from the runtime — see
+// prefetchLead. A flat fraction fired 37 minutes early on a long film.
 
 type PlayerState struct {
 	Alive     bool
@@ -249,7 +249,7 @@ func (p *Player) gone() {
 	p.mu.Unlock()
 
 	if now != nil && st.Duration > 0 && st.Pos > 0 {
-		UpdatePosition(now.VideoID, st.Pos, st.Duration, st.Percent())
+		UpdatePosition(now.VideoID, st.Pos, st.Duration)
 	}
 	p.emit(PlayerStateMsg{})
 }
@@ -365,7 +365,8 @@ func (p *Player) onProperty(name string, data any) {
 	// Look ahead once we're far enough in.
 	prefetch := false
 	if now != nil && !p.prefetched && p.cfg.AutoNext &&
-		now.Queue.HasNext() && st.Duration > 0 && st.Frac() >= prefetchAt {
+		now.Queue.HasNext() && st.Duration > 0 &&
+		st.Duration-st.Pos <= prefetchLead(st.Duration) {
 		p.prefetched = true
 		prefetch = true
 	}
@@ -384,7 +385,7 @@ func (p *Player) onProperty(name string, data any) {
 	p.mu.Unlock()
 
 	if save {
-		go UpdatePosition(videoID, st.Pos, st.Duration, st.Percent())
+		go UpdatePosition(videoID, st.Pos, st.Duration)
 	}
 	if prefetch && now != nil {
 		p.emit(PrefetchNextMsg{Prev: *now})
@@ -433,7 +434,7 @@ func (p *Player) onEndFile(reason string) {
 	switch reason {
 	case "eof":
 		// Watched in full — pin it at 100% so history is unambiguous.
-		UpdatePosition(now.VideoID, st.Duration, st.Duration, 100)
+		UpdatePosition(now.VideoID, st.Duration, st.Duration)
 		if autoNext && now.Queue.HasNext() && !prefetched {
 			p.emit(EpisodeEndedMsg{Prev: *now})
 			return
@@ -446,7 +447,7 @@ func (p *Player) onEndFile(reason string) {
 		p.emit(PlayerErrMsg{Err: errors.New("mpv failed to play that stream")})
 	default:
 		if st.Duration > 0 && st.Pos > 0 {
-			UpdatePosition(now.VideoID, st.Pos, st.Duration, st.Percent())
+			UpdatePosition(now.VideoID, st.Pos, st.Duration)
 		}
 	}
 
@@ -489,7 +490,7 @@ func (p *Player) play(req PlayRequest) tea.Msg {
 	p.mu.Unlock()
 
 	if prev != nil && prevSt.Duration > 0 && prevSt.Pos > 0 {
-		UpdatePosition(prev.VideoID, prevSt.Pos, prevSt.Duration, prevSt.Percent())
+		UpdatePosition(prev.VideoID, prevSt.Pos, prevSt.Duration)
 	}
 	if req.Entry.ID != "" {
 		AddHistory(req.Entry, histMax)
@@ -516,7 +517,7 @@ func (p *Player) Stop() tea.Cmd {
 		p.mu.Unlock()
 
 		if now != nil && st.Duration > 0 && st.Pos > 0 {
-			UpdatePosition(now.VideoID, st.Pos, st.Duration, st.Percent())
+			UpdatePosition(now.VideoID, st.Pos, st.Duration)
 		}
 		p.command("quit")
 		return PlayerStateMsg{}
@@ -535,6 +536,6 @@ func (p *Player) Shutdown() {
 	now, st := p.now, p.state
 	p.mu.Unlock()
 	if now != nil && st.Duration > 0 && st.Pos > 0 {
-		UpdatePosition(now.VideoID, st.Pos, st.Duration, st.Percent())
+		UpdatePosition(now.VideoID, st.Pos, st.Duration)
 	}
 }

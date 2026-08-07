@@ -117,7 +117,11 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		a.w, a.h = m.Width, m.Height
 		a.resize()
-		return a, nil
+		// Screens may need to react — the info pane opens itself on a wide
+		// enough terminal and then wants meta for the highlighted row.
+		next, cmd := a.top().Update(msg)
+		a.stack[len(a.stack)-1] = next
+		return a, cmd
 
 	case PlayerStateMsg:
 		a.pstate = m.State

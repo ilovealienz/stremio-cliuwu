@@ -254,6 +254,31 @@ func metaBases(addons []Addon, mediaType, id, hint string) []string {
 	return out
 }
 
+var cacheMetaDetail = newCache[MetaDetail](30*time.Minute, 300)
+
+// GetMetaDetail fetches the full meta object for one title, asking whichever
+// addons declare a meta resource for that id.
+func GetMetaDetail(addons []Addon, mediaType, id, hint string) (MetaDetail, bool) {
+	key := mediaType + ":" + id
+	if v, ok := cacheMetaDetail.Get(key); ok {
+		return v, v.ID != ""
+	}
+
+	for _, base := range metaBases(addons, mediaType, id, hint) {
+		var resp struct {
+			Meta MetaDetail `json:"meta"`
+		}
+		u := fmt.Sprintf("%s/meta/%s/%s.json", base, mediaType, url.PathEscape(id))
+		if getJSON(u, &resp) == nil && resp.Meta.Name != "" {
+			cacheMetaDetail.Set(key, resp.Meta)
+			return resp.Meta, true
+		}
+	}
+
+	cacheMetaDetail.Set(key, MetaDetail{}) // negative cache, don't re-ask
+	return MetaDetail{}, false
+}
+
 // GetSeriesMeta fetches the episode list, asking each capable addon in turn
 // rather than guessing between Cinemeta and Kitsu based on a source tag.
 func GetSeriesMeta(addons []Addon, m Meta) SeriesMeta {

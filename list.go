@@ -298,11 +298,13 @@ func (l *listModel) Update(msg tea.Msg) (bool, tea.Cmd) {
 		l.move(-l.rows() / 2)
 	case "ctrl+d":
 		l.move(l.rows() / 2)
-	case "home", "g":
+	case "home":
+		// `g`/`G` deliberately not bound: screens want those letters, and a
+		// list key that only sometimes wins is worse than no key at all.
 		l.cursor = 0
 		l.snapToSelectable(1)
 		l.scrollIntoView()
-	case "end", "G":
+	case "end":
 		l.cursor = len(l.view) - 1
 		l.snapToSelectable(-1)
 		l.scrollIntoView()
@@ -502,10 +504,23 @@ func (l *listModel) row(vi int, selected bool) string {
 	}
 
 	badge := it.Badge
-	pad := l.w - lipgloss.Width(left) - lipgloss.Width(badge) - 2
-	if pad < 1 {
-		// No room for both — drop the badge before mangling the label.
-		return clamp(left, l.w-1)
+	badgeW := lipgloss.Width(badge)
+
+	// Badges line up on a fixed right edge. Deriving the gap from a minimum
+	// instead pushed truncated rows one column further out than the rest,
+	// because a label that exactly filled the space left no room for it.
+	const gap = 2
+	right := l.w - 1
+
+	avail := right - badgeW - gap
+	if badgeW > 0 && avail < 12 {
+		return ellipsize(left, right) // genuinely no room for both
+	}
+
+	left = ellipsize(left, avail)
+	pad := right - lipgloss.Width(left) - badgeW
+	if pad < gap {
+		pad = gap
 	}
 	return left + strings.Repeat(" ", pad) + badge
 }

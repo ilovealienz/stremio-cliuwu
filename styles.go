@@ -129,6 +129,7 @@ var (
 	stOK    = lipgloss.NewStyle().Foreground(clGreen)
 	stWarn  = lipgloss.NewStyle().Foreground(clYellow)
 	stToast = lipgloss.NewStyle().Foreground(clCyan)
+	stFaint = lipgloss.NewStyle().Foreground(clGrey).Faint(true)
 
 	stSelected = lipgloss.NewStyle().Foreground(lipgloss.Color("15"))
 	stBarRest  = lipgloss.NewStyle().Foreground(clGrey)
@@ -183,6 +184,17 @@ func clamp(s string, w int) string {
 		return ""
 	}
 	return lipgloss.NewStyle().MaxWidth(w).Render(s)
+}
+
+// ellipsize truncates to w columns with a trailing marker, ANSI-aware.
+func ellipsize(s string, w int) string {
+	if w <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= w {
+		return s
+	}
+	return clamp(s, w-1) + stHint.Render("…")
 }
 
 func rule(w int) string { return stRule.Render(strings.Repeat("─", max(0, w))) }

@@ -229,6 +229,39 @@ func (a Addon) SupportsResource(name, mediaType, id string) bool {
 	return false
 }
 
+// MetaDetail is the full meta object. Catalog rows only carry enough to draw
+// a list; this is what the /meta/ endpoint actually returns, and it's fetched
+// lazily for whichever row you're looking at.
+type MetaDetail struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+
+	ReleaseInfo string `json:"releaseInfo"`
+	Released    string `json:"released"`
+	Runtime     string `json:"runtime"`
+	ImdbRating  string `json:"imdbRating"`
+	Country     string `json:"country"`
+	Awards      string `json:"awards"`
+	Status      string `json:"status"`
+	Poster      string `json:"poster"`
+
+	// Addons disagree on singular vs plural here, so accept both.
+	Genres   []string `json:"genres"`
+	Genre    []string `json:"genre"`
+	Cast     []string `json:"cast"`
+	Director []string `json:"director"`
+	Writer   []string `json:"writer"`
+}
+
+func (m MetaDetail) AllGenres() []string {
+	if len(m.Genres) > 0 {
+		return m.Genres
+	}
+	return m.Genre
+}
+
 // ── Catalog / meta types ──────────────────────────────────────────────────────
 
 type Meta struct {
@@ -370,7 +403,7 @@ func (q *EpQueue) SeasonEpisodes(season int) []Video {
 // configVersion is bumped whenever a new field needs a non-zero default.
 // Without this, adding a bool to the struct silently gives every existing
 // install `false`, because encoding/json just leaves absent fields alone.
-const configVersion = 3
+const configVersion = 6
 
 type AppConfig struct {
 	Version          int    `json:"version"`
@@ -384,6 +417,8 @@ type AppConfig struct {
 	CloseMpvOnExit   bool   `json:"close_mpv_on_exit"`
 	CachedFirst      bool   `json:"cached_first"`
 	Accent           string `json:"accent"`
+	AutoInfo         bool   `json:"auto_info"`
+	Posters          bool   `json:"posters"`
 }
 
 // SetDefaults fills in anything missing. Returns true if it changed something,
@@ -408,6 +443,21 @@ func (c *AppConfig) SetDefaults() bool {
 
 	if c.Version < 3 {
 		c.Accent = "pink"
+		changed = true
+	}
+
+	if c.Version < 4 {
+		c.AutoInfo = true
+		changed = true
+	}
+
+	if c.Version < 5 {
+		c.Posters = true
+		changed = true
+	}
+
+	if c.Version < 6 {
+		c.Posters = false // opt-in: half-block art is rough at this size
 		changed = true
 	}
 

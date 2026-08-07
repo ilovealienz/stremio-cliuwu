@@ -88,11 +88,10 @@ type ContinueItem struct {
 }
 
 func inProgress(e HistoryEntry) bool {
-	if e.Watched || e.Position <= 0 || e.Duration <= 0 {
+	if e.Watched {
 		return false
 	}
-	pct := e.Position / e.Duration * 100
-	return pct >= 5 && pct <= 90
+	return HasResumePoint(e.Position, e.Duration)
 }
 
 // ContinueTarget decides what "continue watching" should offer.
@@ -209,7 +208,7 @@ func AddHistory(e HistoryEntry, maxEntries int) {
 }
 
 // UpdatePosition saves playback position. Marks watched at >= 70%.
-func UpdatePosition(videoID string, pos, duration, percent float64) {
+func UpdatePosition(videoID string, pos, duration float64) {
 	histMu.Lock()
 	defer histMu.Unlock()
 
@@ -218,7 +217,7 @@ func UpdatePosition(videoID string, pos, duration, percent float64) {
 		if e.VideoID == videoID {
 			h.Items[i].Position = pos
 			h.Items[i].Duration = duration
-			if percent >= 70 {
+			if IsWatchedAt(pos, duration) {
 				h.Items[i].Watched = true
 			}
 			saveLocked(h)

@@ -194,13 +194,36 @@ type catalogScreen struct {
 
 	list   listModel
 	busy   busy
+	info   infoPane
 	loaded bool
 }
 
 func newCatalogScreen(ref CatalogRef) *catalogScreen {
 	l := newList()
 	l.Empty = "empty catalog"
-	return &catalogScreen{id: newAsyncID(), ref: ref, list: l, busy: newBusy("loading…")}
+	return &catalogScreen{
+		id: newAsyncID(), ref: ref, list: l,
+		busy: newBusy("loading…"), info: newInfoPane(),
+	}
+}
+
+// layout resizes the list and pane for the current split.
+func (s *catalogScreen) layout() {
+	h := s.h - 1
+	s.list.SetSize(paneLayout(s.w, &s.info), h)
+	s.info.SetSize(paneSize(s.w, &s.info), h, !s.info.Split(s.w))
+}
+
+// syncInfo loads meta for whatever row the cursor is on.
+func (s *catalogScreen) syncInfo() tea.Cmd {
+	if !s.info.On() {
+		return nil
+	}
+	i := s.list.Selected()
+	if i < 0 || i >= len(s.metas) {
+		return nil
+	}
+	return s.info.Show(s.metas[i])
 }
 
 func (s *catalogScreen) Init() tea.Cmd {
@@ -243,11 +266,18 @@ func (s *catalogScreen) Typing() bool  { return s.list.Typing() }
 
 func (s *catalogScreen) SetSize(w, h int) {
 	s.baseScreen.SetSize(w, h)
-	s.list.SetSize(w, h-1)
+	s.info.AutoFit(w)
+	s.layout()
 }
 
 func (s *catalogScreen) Footer() string {
-	pairs := [][2]string{{"enter", "open"}, {"f", "favourite"}, {"/", "filter"}}
+	pairs := [][2]string{{"enter", "open"}, {"i", "info"}, {"f", "favourite"}, {"/", "filter"}}
+	if s.info.On() {
+		pairs = append(pairs, [2]string{"p", "poster"})
+	}
+	if s.info.CanScroll() {
+		pairs = append(pairs, [2]string{"J/K", "scroll info"})
+	}
 	if len(s.ref.Genres) > 0 {
 		pairs = append(pairs, [2]string{"g", "genre"})
 	}
@@ -280,20 +310,30 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.metas = append(s.metas, m.metas...)
 		s.hasMore = m.hasMore && len(m.metas) > 0
 		s.rebuild()
-		return s, nil
+		return s, s.syncInfo()
 
 	case tea.KeyMsg:
-		// Checked before the list sees it: `g` is jump-to-top in the list
-		// widget, which would otherwise swallow it.
-		if m.String() == "g" && len(s.ref.Genres) > 0 {
-			return s, push(newGenrePicker(s.ref, func(g string) tea.Cmd {
-				return s.setGenre(g)
-			}))
+		if !s.list.Typing() {
+			// Checked before the list sees it — but never while the filter is
+			// open, or typing "g" would jump to the genre picker.
+			if m.String() == "g" && len(s.ref.Genres) > 0 {
+				return s, push(newGenrePicker(s.ref, func(g string) tea.Cmd {
+					return s.setGenre(g)
+				}))
+			}
+			if cmd, done := infoKeys(&s.info, s.w, s.h, m); done {
+				return s, cmd
+			}
 		}
 		if consumed, cmd := s.list.Update(msg); consumed {
-			return s, cmd
+			// Cursor may have moved — refresh the pane for the new row.
+			return s, tea.Batch(cmd, s.syncInfo())
 		}
 		switch m.String() {
+		case "i":
+			s.info.Toggle()
+			s.layout()
+			return s, s.syncInfo()
 		case "enter":
 			if i := s.list.Selected(); i >= 0 {
 				return s, push(openMeta(s.metas[i], 0))
@@ -314,7 +354,7 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, popRoot()
 		}
 	}
-	return s, s.busy.update(msg)
+	return s, tea.Batch(s.busy.update(msg), s.info.Update(msg))
 }
 
 func (s *catalogScreen) View() string {
@@ -328,7 +368,10 @@ func (s *catalogScreen) View() string {
 		what += "  ·  all genres"
 	}
 	head := "  " + stSub.Render(what) + "\n"
-	return head + s.list.View()
+	if s.info.On() && !s.info.Split(s.w) {
+		return head + s.info.View() // too narrow to split — info takes over
+	}
+	return head + joinPane(s.list.View(), paneLayout(s.w, &s.info), &s.info)
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────
@@ -350,13 +393,34 @@ type searchScreen struct {
 
 	list   listModel
 	busy   busy
+	info   infoPane
 	loaded bool
 }
 
 func newSearchScreen(query string) *searchScreen {
 	l := newList()
 	l.Empty = "nothing found"
-	return &searchScreen{id: newAsyncID(), query: query, list: l, busy: newBusy("searching…")}
+	return &searchScreen{
+		id: newAsyncID(), query: query, list: l,
+		busy: newBusy("searching…"), info: newInfoPane(),
+	}
+}
+
+func (s *searchScreen) layout() {
+	h := s.h - 2
+	s.list.SetSize(paneLayout(s.w, &s.info), h)
+	s.info.SetSize(paneSize(s.w, &s.info), h, !s.info.Split(s.w))
+}
+
+func (s *searchScreen) syncInfo() tea.Cmd {
+	if !s.info.On() {
+		return nil
+	}
+	i := s.list.Selected()
+	if i < 0 || i >= len(s.shown) {
+		return nil
+	}
+	return s.info.Show(s.metas[s.shown[i]])
 }
 
 func (s *searchScreen) Init() tea.Cmd {
@@ -373,12 +437,15 @@ func (s *searchScreen) Typing() bool  { return s.list.Typing() }
 
 func (s *searchScreen) SetSize(w, h int) {
 	s.baseScreen.SetSize(w, h)
-	s.list.SetSize(w, h-2)
+	s.info.AutoFit(w)
+	s.layout()
 }
 
 func (s *searchScreen) Footer() string {
 	return keyHint(
 		[2]string{"enter", "open"},
+		[2]string{"i", "info"},
+		[2]string{"J/K", "scroll"},
 		[2]string{"tab", "category"},
 		[2]string{"f", "favourite"},
 		[2]string{"/", "filter"},
@@ -397,13 +464,25 @@ func (s *searchScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.metas = m.metas
 		s.collectCats()
 		s.rebuild()
-		return s, nil
+		return s, s.syncInfo()
+
+	case tea.WindowSizeMsg:
+		return s, s.syncInfo()
 
 	case tea.KeyMsg:
+		if !s.list.Typing() {
+			if cmd, done := infoKeys(&s.info, s.w, s.h, m); done {
+				return s, cmd
+			}
+		}
 		if consumed, cmd := s.list.Update(msg); consumed {
-			return s, cmd
+			return s, tea.Batch(cmd, s.syncInfo())
 		}
 		switch m.String() {
+		case "i":
+			s.info.Toggle()
+			s.layout()
+			return s, s.syncInfo()
 		case "enter":
 			if i := s.list.Selected(); i >= 0 && i < len(s.shown) {
 				return s, push(openMeta(s.metas[s.shown[i]], 0))
@@ -418,11 +497,13 @@ func (s *searchScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			if len(s.cats) > 1 {
 				s.catIdx = (s.catIdx + 1) % len(s.cats)
 				s.rebuild()
+				return s, s.syncInfo()
 			}
 		case "shift+tab":
 			if len(s.cats) > 1 {
 				s.catIdx = (s.catIdx - 1 + len(s.cats)) % len(s.cats)
 				s.rebuild()
+				return s, s.syncInfo()
 			}
 		case "esc", "backspace":
 			return s, pop()
@@ -430,7 +511,7 @@ func (s *searchScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, popRoot()
 		}
 	}
-	return s, s.busy.update(msg)
+	return s, tea.Batch(s.busy.update(msg), s.info.Update(msg))
 }
 
 // collectCats builds the category tabs from whatever the search returned, so
@@ -507,7 +588,10 @@ func (s *searchScreen) View() string {
 	if bar := s.catBar(); bar != "" {
 		out += bar + "\n"
 	}
-	return out + s.list.View()
+	if s.info.On() && !s.info.Split(s.w) {
+		return out + s.info.View()
+	}
+	return out + joinPane(s.list.View(), paneLayout(s.w, &s.info), &s.info)
 }
 
 func searchPrompt() *promptScreen {
