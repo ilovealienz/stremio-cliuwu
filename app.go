@@ -287,26 +287,71 @@ func quitCmd() tea.Cmd {
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
-const headerLines = 4 // rule, title, rule, blank
+// chromeLayout decides what fits.
+//
+// The body used to be floored at 3 rows, which meant View emitted more lines
+// than the terminal had on a short window: the alt screen scrolled and the
+// header disappeared off the top with no way back. Nothing can be floored —
+// if the space isn't there, something has to go.
+type chromeLayout struct {
+	compact    bool // title only, no rules or blank line
+	showRule   bool // divider above the footer
+	showToast  bool
+	showPlayer bool
+	body       int
+}
 
-func (a *app) footerLines() int {
-	n := 2 // rule + hints
-	if a.toastText != "" {
+func (c chromeLayout) headerLines() int {
+	if c.compact {
+		return 1
+	}
+	return 4 // rule, title, rule, blank
+}
+
+func (c chromeLayout) footerLines() int {
+	n := 1 // key hints
+	if c.showRule {
 		n++
 	}
-	if a.pstate.Alive {
+	if c.showToast {
+		n++
+	}
+	if c.showPlayer {
 		n += 2 // now-playing line + progress bar
 	}
 	return n
 }
 
-func (a *app) bodyHeight() int {
-	h := a.h - headerLines - a.footerLines()
-	if h < 3 {
-		h = 3
+// chrome drops decoration until the body has at least one row, in order of
+// what's least painful to lose.
+func (a *app) chrome() chromeLayout {
+	c := chromeLayout{
+		showRule:   true,
+		showToast:  a.toastText != "",
+		showPlayer: a.pstate.Alive,
 	}
-	return h
+
+	for range 4 {
+		if a.h >= c.headerLines()+c.footerLines()+1 {
+			break
+		}
+		switch {
+		case c.showPlayer:
+			c.showPlayer = false
+		case c.showToast:
+			c.showToast = false
+		case !c.compact:
+			c.compact = true
+		case c.showRule:
+			c.showRule = false
+		}
+	}
+
+	c.body = max(1, a.h-c.headerLines()-c.footerLines())
+	return c
 }
+
+func (a *app) bodyHeight() int { return a.chrome().body }
 
 func (a *app) resize() {
 	bh := a.bodyHeight()
@@ -319,31 +364,38 @@ func (a *app) View() string {
 	if a.w == 0 {
 		return "\n  starting…\n"
 	}
+
+	c := a.chrome()
 	var b strings.Builder
 
 	// Header
-	b.WriteString(stRule.Render(strings.Repeat("▓", a.w)) + "\n")
 	crumbs := []string{stBrand.Render("stremio-cli") + stTitle.Render("uwu")}
 	for _, s := range a.stack[1:] {
 		if t := s.Title(); t != "" {
 			crumbs = append(crumbs, stTitle.Render(t))
 		}
 	}
-	b.WriteString(" " + strings.Join(crumbs, stCrumb.Render(" › ")) + "\n")
-	b.WriteString(stRule.Render(strings.Repeat("▓", a.w)) + "\n\n")
+	title := " " + strings.Join(crumbs, stCrumb.Render(" › "))
 
-	// Body, padded to exactly bodyHeight lines
-	body := a.top().View()
-	lines := strings.Split(body, "\n")
-	bh := a.bodyHeight()
-	if len(lines) > bh {
-		lines = lines[:bh]
+	if c.compact {
+		b.WriteString(clamp(title, a.w) + "\n")
+	} else {
+		bar := stRule.Render(strings.Repeat("▓", a.w))
+		b.WriteString(bar + "\n" + clamp(title, a.w) + "\n" + bar + "\n\n")
+	}
+
+	// Body, padded to exactly c.body lines
+	lines := strings.Split(a.top().View(), "\n")
+	if len(lines) > c.body {
+		lines = lines[:c.body]
 	}
 	b.WriteString(strings.Join(lines, "\n"))
-	b.WriteString(strings.Repeat("\n", bh-len(lines)+1))
+	b.WriteString(strings.Repeat("\n", c.body-len(lines)+1))
 
 	// Footer
-	b.WriteString(rule(a.w) + "\n")
+	if c.showRule {
+		b.WriteString(rule(a.w) + "\n")
+	}
 
 	hints := a.top().Footer()
 	if a.pstate.Alive {
@@ -351,7 +403,7 @@ func (a *app) View() string {
 	}
 	b.WriteString(clamp(hints, a.w))
 
-	if a.toastText != "" {
+	if c.showToast {
 		st := stToast
 		if a.toastErr {
 			st = stErr
@@ -359,7 +411,7 @@ func (a *app) View() string {
 		b.WriteString("\n " + clamp(st.Render(a.toastText), a.w-1))
 	}
 
-	if a.pstate.Alive {
+	if c.showPlayer {
 		b.WriteString("\n" + a.playerBar())
 	}
 	return b.String()
