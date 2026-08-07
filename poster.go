@@ -28,10 +28,39 @@ import (
 // text — width calculations, the pane layout and resize all work untouched,
 // and there's no C library or protocol negotiation involved.
 
-// A cell is one pixel wide, so the cell width *is* the horizontal resolution.
-// 22 cells meant a 22-pixel-wide image, which no amount of careful scaling
-// rescues — the fix for a blocky poster is simply more cells.
-const posterMaxCells = 40
+// A cell is one pixel wide, so the cell width *is* the horizontal resolution:
+// a 22-cell poster is a 22-pixel image, which no amount of careful scaling
+// rescues. More cells is the only real quality dial, which is why the size is
+// a setting rather than a fixed constant.
+var posterSizes = []string{"small", "medium", "large", "xl"}
+
+// posterBudget returns the cell limits for a size, given the panel dimensions.
+// Height is usually the binding constraint in the side panel; the width cap
+// mostly matters when the panel has taken over the screen.
+func posterBudget(size string, paneW, paneH int) (int, int) {
+	switch size {
+	case "small":
+		return min(paneW, 24), max(4, paneH/5)
+	case "large":
+		return min(paneW, 56), max(8, paneH/2)
+	case "xl":
+		return min(paneW, 72), max(10, paneH*2/3)
+	}
+	return min(paneW, 40), max(6, paneH/3) // medium
+}
+
+// nextPosterSize cycles through the sizes.
+func nextPosterSize(cur string) string {
+	for i, s := range posterSizes {
+		if s == cur {
+			return posterSizes[(i+1)%len(posterSizes)]
+		}
+	}
+	return "medium"
+}
+
+// posterGen bumps when the size setting changes, so panels know to re-render.
+var posterGen int
 
 var (
 	cachePosterImg = newCache[*image.RGBA](30*time.Minute, 60)
@@ -166,7 +195,7 @@ func posterSize(srcW, srcH, maxW, maxH int) (int, int) {
 	}
 	ratio := float64(srcH) / float64(srcW)
 
-	w := min(maxW, posterMaxCells)
+	w := maxW
 	h := int(float64(w) * ratio / 2)
 
 	if h > maxH {

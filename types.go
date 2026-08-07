@@ -403,7 +403,7 @@ func (q *EpQueue) SeasonEpisodes(season int) []Video {
 // configVersion is bumped whenever a new field needs a non-zero default.
 // Without this, adding a bool to the struct silently gives every existing
 // install `false`, because encoding/json just leaves absent fields alone.
-const configVersion = 6
+const configVersion = 7
 
 type AppConfig struct {
 	Version          int    `json:"version"`
@@ -419,6 +419,7 @@ type AppConfig struct {
 	Accent           string `json:"accent"`
 	AutoInfo         bool   `json:"auto_info"`
 	Posters          bool   `json:"posters"`
+	PosterSize       string `json:"poster_size"`
 }
 
 // SetDefaults fills in anything missing. Returns true if it changed something,
@@ -458,6 +459,11 @@ func (c *AppConfig) SetDefaults() bool {
 
 	if c.Version < 6 {
 		c.Posters = false // opt-in: half-block art is rough at this size
+		changed = true
+	}
+
+	if c.Version < 7 || c.PosterSize == "" {
+		c.PosterSize = "medium"
 		changed = true
 	}
 

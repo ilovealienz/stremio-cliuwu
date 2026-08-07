@@ -39,6 +39,7 @@ type infoPane struct {
 
 	posterID asyncID
 	poster   string // rendered half-block art
+	gen      int    // poster size generation this was rendered at
 
 	full    bool // taking over the whole screen rather than sitting beside
 	indent  int  // left margin, used when centred
@@ -109,9 +110,15 @@ func (p *infoPane) Split(total int) bool { return PaneWidth(total) > 0 }
 
 // Show loads meta for a title, if it isn't already showing.
 func (p *infoPane) Show(m Meta) tea.Cmd {
-	if !p.on || m.ID == "" || m.ID == p.forID {
+	if !p.on || m.ID == "" {
 		return nil
 	}
+	// Same title is normally a no-op, unless the poster size has changed
+	// underneath us and the artwork needs redrawing.
+	if m.ID == p.forID && p.gen == posterGen {
+		return nil
+	}
+	p.gen = posterGen
 
 	p.forID = m.ID
 	p.loaded = false
@@ -166,9 +173,7 @@ func (p *infoPane) loadPoster() tea.Cmd {
 
 	p.posterID = newAsyncID()
 	id, url := p.posterID, p.detail.Poster
-	// A third of the height, not half: the panel has to fit the description
-	// and credits underneath, and a taller poster pushed those off the end.
-	maxW, maxH := p.w, max(6, p.h/3)
+	maxW, maxH := posterBudget(ctx.cfg.PosterSize, p.w, p.h)
 
 	return func() tea.Msg {
 		return posterMsg{id: id, url: url, art: FetchPoster(url, maxW, maxH)}

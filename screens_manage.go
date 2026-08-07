@@ -394,6 +394,7 @@ func (s *settingsScreen) rebuild() {
 		{Label: bold("auto-open info panel"), Sub: "on wide terminals · i toggles it anyway",
 			Badge: onOff(c.AutoInfo)},
 		{Label: bold("posters"), Sub: "block art in the info panel · looks rough, be warned", Badge: onOff(c.Posters)},
+		{Label: bold("poster size"), Sub: "bigger is sharper but eats the panel", Badge: orDash(c.PosterSize)},
 	})
 }
 
@@ -460,6 +461,10 @@ func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, s.save()
 			case 11:
 				ctx.cfg.Posters = !ctx.cfg.Posters
+				return s, s.save()
+			case 12:
+				ctx.cfg.PosterSize = nextPosterSize(ctx.cfg.PosterSize)
+				posterGen++ // force panels to redraw at the new size
 				return s, s.save()
 			case 9:
 				return s, push(newPrompt("accent colour", "pink", ctx.cfg.Accent, func(v string) tea.Cmd {
