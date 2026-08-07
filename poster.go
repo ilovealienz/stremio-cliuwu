@@ -13,6 +13,11 @@ import (
 	_ "image/jpeg"
 	_ "image/png"
 
+	// Pure Go, no cgo — cross-compilation stays as it is. Covers lossy VP8
+	// and lossless VP8L; animated webp isn't supported upstream, which
+	// doesn't matter for posters.
+	_ "golang.org/x/image/webp"
+
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
 )
@@ -227,6 +232,8 @@ func renderPoster(img *image.RGBA, maxW, maxH int) string {
 			bo := scaled.RGBAAt(x, y*2+1)
 			sb.WriteString(cellEscape(profile, t.R, t.G, t.B, bo.R, bo.G, bo.B))
 		}
+		// Reset before the newline, so a truncated row can't leak its
+		// background onto whatever renders on the following line.
 		sb.WriteString("\x1b[0m")
 		if y < ch-1 {
 			sb.WriteString("\n")
@@ -259,7 +266,7 @@ func FetchPoster(url string, maxW, maxH int) string {
 		}
 		decoded, _, err := image.Decode(res.Body)
 		if err != nil {
-			return "" // webp needs golang.org/x/image; most posters are jpeg
+			return ""
 		}
 		img = toRGBA(decoded)
 		cachePosterImg.Set(url, img)
