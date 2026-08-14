@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 )
 
 // configDir returns the per-user config directory, honouring XDG on unix.
@@ -51,4 +52,24 @@ func readJSON(path string, v any) error {
 		return err
 	}
 	return json.Unmarshal(b, v)
+}
+
+// defaultDownloadDir is a sensible starting point for the settings prompt.
+func defaultDownloadDir() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "downloads"
+	}
+	return filepath.Join(home, "Downloads", appName)
+}
+
+// expandHome turns a leading ~ into the home directory, since people type it
+// and os functions don't understand it.
+func expandHome(p string) string {
+	if p == "~" || strings.HasPrefix(p, "~/") {
+		if home, err := os.UserHomeDir(); err == nil {
+			return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(p, "~"), "/"))
+		}
+	}
+	return p
 }

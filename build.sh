@@ -16,10 +16,17 @@
 set -euo pipefail
 
 BINARY="stremio-cliuwu"
-VERSION="0.2.0"
-LDFLAGS="-s -w -X main.version=${VERSION}"
 
 cd "$(dirname "$0")"
+
+# Derived from git, not hardcoded: a literal goes stale the moment you tag,
+# and every local build then claims the wrong version. On a tagged commit this
+# gives "0.4.3"; between tags, "0.4.3-5-gabc1234"; outside a repo, "dev".
+# Override with VERSION=1.2.3 ./build.sh if you need to.
+VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+VERSION="${VERSION#v}"
+LDFLAGS="-s -w -X main.version=${VERSION}"
+
 
 tidy() {
   echo "  ⟳ go mod tidy"

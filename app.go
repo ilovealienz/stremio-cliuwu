@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -16,8 +17,9 @@ type appCtx struct {
 	cfg    AppConfig
 	refs   AddonList
 	addons []Addon
-	player *Player
-	prog   *tea.Program
+	player     *Player
+	downloader *Downloader
+	prog       *tea.Program
 }
 
 var ctx *appCtx
@@ -134,6 +136,18 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case PlayerNoticeMsg:
 		return a, toast(m.Text)
+
+	case DownloadTickMsg:
+		next, cmd := a.top().Update(msg)
+		a.stack[len(a.stack)-1] = next
+		a.resize()
+		return a, cmd
+
+	case DownloadDoneMsg:
+		if m.Err != nil {
+			return a, toastErr("download failed — " + m.Err.Error())
+		}
+		return a, toast("downloaded " + m.Label)
 
 	case PrefetchNextMsg:
 		return a, a.advanceTo(m.Prev, "next up — ")
@@ -296,9 +310,10 @@ func quitCmd() tea.Cmd {
 type chromeLayout struct {
 	compact    bool // title only, no rules or blank line
 	showRule   bool // divider above the footer
-	showToast  bool
-	showPlayer bool
-	body       int
+	showToast    bool
+	showPlayer   bool
+	showDownload bool
+	body         int
 }
 
 func (c chromeLayout) headerLines() int {
@@ -319,6 +334,9 @@ func (c chromeLayout) footerLines() int {
 	if c.showPlayer {
 		n += 2 // now-playing line + progress bar
 	}
+	if c.showDownload {
+		n++
+	}
 	return n
 }
 
@@ -326,16 +344,19 @@ func (c chromeLayout) footerLines() int {
 // what's least painful to lose.
 func (a *app) chrome() chromeLayout {
 	c := chromeLayout{
-		showRule:   true,
-		showToast:  a.toastText != "",
-		showPlayer: a.pstate.Alive,
+		showRule:     true,
+		showToast:    a.toastText != "",
+		showPlayer:   a.pstate.Alive,
+		showDownload: ctx != nil && ctx.downloader != nil && ctx.downloader.Pending() > 0,
 	}
 
-	for range 4 {
+	for range 5 {
 		if a.h >= c.headerLines()+c.footerLines()+1 {
 			break
 		}
 		switch {
+		case c.showDownload:
+			c.showDownload = false
 		case c.showPlayer:
 			c.showPlayer = false
 		case c.showToast:
@@ -411,10 +432,38 @@ func (a *app) View() string {
 		b.WriteString("\n " + clamp(st.Render(a.toastText), a.w-1))
 	}
 
+	if c.showDownload {
+		b.WriteString("\n" + a.downloadBar())
+	}
 	if c.showPlayer {
 		b.WriteString("\n" + a.playerBar())
 	}
 	return b.String()
+}
+
+// downloadBar is a single line: enough to know something's happening and
+// roughly how far along, without leaving the screen you're on.
+func (a *app) downloadBar() string {
+	d, ok := ctx.downloader.Active()
+	if !ok {
+		return " " + stHint.Render(fmt.Sprintf("%d download(s) queued", ctx.downloader.Pending()))
+	}
+
+	right := fmt.Sprintf("%s / %s", fmtBytes(d.Done), fmtBytes(d.Total))
+	if d.Speed > 0 {
+		right += "  " + fmtBytes(d.Speed) + "/s"
+	}
+	if n := ctx.downloader.Pending(); n > 1 {
+		right = fmt.Sprintf("+%d  ", n-1) + right
+	}
+
+	left := " " + stKey.Render("↓") + " " + stSelected.Render(d.Label)
+	pad := a.w - lipgloss.Width(left) - lipgloss.Width(right) - 1
+	if pad < 1 {
+		left = clamp(left, a.w-lipgloss.Width(right)-2)
+		pad = max(1, a.w-lipgloss.Width(left)-lipgloss.Width(right)-1)
+	}
+	return left + strings.Repeat(" ", pad) + stSub.Render(right) + cReset
 }
 
 func (a *app) playerBar() string {

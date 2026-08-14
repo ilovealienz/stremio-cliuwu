@@ -395,6 +395,10 @@ func (s *settingsScreen) rebuild() {
 			Badge: onOff(c.AutoInfo)},
 		{Label: bold("posters"), Sub: "block art in the info panel · looks rough, be warned", Badge: onOff(c.Posters)},
 		{Label: bold("poster size"), Sub: "bigger is sharper but eats the panel", Badge: orDash(c.PosterSize)},
+		{Label: bold("download location"), Sub: "where D on a stream saves to", Badge: orDash(c.DownloadDir)},
+		{Label: bold("organise downloads"), Sub: "off saves everything flat", Badge: onOff(c.DownloadFolders)},
+		{Label: bold("movie filename"), Sub: orDash(c.MoviePattern)},
+		{Label: bold("episode filename"), Sub: orDash(c.EpisodePattern)},
 	})
 }
 
@@ -466,6 +470,33 @@ func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				ctx.cfg.PosterSize = nextPosterSize(ctx.cfg.PosterSize)
 				posterGen++ // force panels to redraw at the new size
 				return s, s.save()
+			case 13:
+				return s, push(newPrompt("download location", defaultDownloadDir(), ctx.cfg.DownloadDir,
+					func(v string) tea.Cmd {
+						ctx.cfg.DownloadDir = expandHome(v)
+						return s.save()
+					}, "~ is expanded · folders are created as needed"))
+			case 14:
+				ctx.cfg.DownloadFolders = !ctx.cfg.DownloadFolders
+				return s, s.save()
+			case 15:
+				return s, push(newPrompt("movie filename", DefaultMoviePattern, ctx.cfg.MoviePattern,
+					func(v string) tea.Cmd {
+						ctx.cfg.MoviePattern = v
+						return s.save()
+					},
+					"placeholders: {title} {year}",
+					"/ makes a folder · extension is added for you",
+				))
+			case 16:
+				return s, push(newPrompt("episode filename", DefaultEpisodePattern, ctx.cfg.EpisodePattern,
+					func(v string) tea.Cmd {
+						ctx.cfg.EpisodePattern = v
+						return s.save()
+					},
+					"placeholders: {show} {season} {episode} {title} {year}",
+					"/ makes a folder · extension is added for you",
+				))
 			case 9:
 				return s, push(newPrompt("accent colour", "pink", ctx.cfg.Accent, func(v string) tea.Cmd {
 					ctx.cfg.Accent = v

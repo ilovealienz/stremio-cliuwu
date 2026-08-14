@@ -52,6 +52,13 @@ func padPlain(s string, n int) string {
 	return s + strings.Repeat(" ", n-w)
 }
 
+func downloadsSub() string {
+	if n := ctx.downloader.Pending(); n > 0 {
+		return fmt.Sprintf("%d in progress", n)
+	}
+	return "saved files"
+}
+
 func section(name string) menuEntry { return menuEntry{head: name} }
 
 func spacer() menuEntry { return menuEntry{head: " "} }
@@ -149,6 +156,8 @@ func (s *menuScreen) rebuild() {
 			open: func() tea.Cmd { return push(newFavsScreen()) }},
 		menuEntry{key: "h", label: "history", sub: "recently watched",
 			open: func() tea.Cmd { return push(newHistoryScreen()) }},
+		menuEntry{key: "D", label: "downloads", sub: downloadsSub(),
+			open: func() tea.Cmd { return push(newDownloadsScreen()) }},
 		spacer(),
 
 		section("setup"),
@@ -187,6 +196,14 @@ func (s *menuScreen) accel(k string) tea.Cmd {
 
 func (s *menuScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	switch m := msg.(type) {
+	case DownloadTickMsg:
+		cur := s.list.Selected()
+		s.rebuild()
+		if cur >= 0 {
+			s.list.Focus(cur)
+		}
+		return s, nil
+
 	case PlayerStateMsg:
 		cur := s.list.Selected()
 		s.rebuild()

@@ -101,9 +101,13 @@ func (s *streamScreen) Footer() string {
 	pairs := [][2]string{
 		{"enter", "play"},
 		{"0-9", "jump"},
+		{"D", "download"},
 		{"/", "filter"},
 		{"r", "reverse"},
 		{"R", "refetch"},
+	}
+	if len(s.providers) > 2 {
+		pairs = append(pairs, [2]string{"tab", "provider"})
 	}
 	if s.target.Queue.HasPrev() {
 		pairs = append(pairs, [2]string{"[", "prev ep"})
@@ -254,7 +258,7 @@ func (s *streamScreen) launch(st Stream, resume float64) tea.Cmd {
 // the wrong default — often enough you want to start it over.
 func (s *streamScreen) play(st Stream) tea.Cmd {
 	resume := s.target.Resume
-	if resume <= 5 || !ctx.cfg.AutoResume {
+	if !ctx.cfg.AutoResume || resume <= 5 {
 		return tea.Batch(s.launch(st, 0), toast("loading "+s.target.Label+"…"))
 	}
 
@@ -269,6 +273,23 @@ func (s *streamScreen) play(st Stream) tea.Cmd {
 			return tea.Batch(s.launch(st, 0), toast("starting over"))
 		},
 	))
+}
+
+// download queues the selected stream to disk.
+func (s *streamScreen) download(st Stream) tea.Cmd {
+	if ctx.cfg.DownloadDir == "" {
+		return toastErr("set a download location in settings first")
+	}
+	if st.URL == "" {
+		return toastErr("that stream has no url")
+	}
+
+	path := DownloadPath(ctx.cfg.DownloadDir, s.target, st.URL)
+	msg, ok := ctx.downloader.Add(s.target.Label, st.URL, path)
+	if !ok {
+		return toastErr(msg)
+	}
+	return toast(msg)
 }
 
 // nextEpisodeTarget advances a finished request's queue by one, continuing
@@ -344,6 +365,12 @@ func (s *streamScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			if len(s.providers) > 1 {
 				s.provIdx = (s.provIdx - 1 + len(s.providers)) % len(s.providers)
 				s.rebuild()
+			}
+		case "D":
+			// Shifted deliberately: it writes to disk, and it sits right
+			// beside the keys you're mashing to pick a stream.
+			if i := s.list.Selected(); i >= 0 && i < len(s.shown) {
+				return s, s.download(s.streams[s.shown[i]])
 			}
 		case "R":
 			return s, tea.Batch(s.reload(), toast("refetching streams…"))

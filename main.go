@@ -11,7 +11,10 @@ import (
 )
 
 const appName = "stremio-cliuwu"
-var version = "0.2.0"
+// version is overwritten at build time via
+// -ldflags="-X main.version=…". "dev" is what an untagged local build
+// reports, which is more honest than a hardcoded number that goes stale.
+var version = "dev"
 
 func main() {
 	for _, arg := range os.Args[1:] {
@@ -47,11 +50,13 @@ func main() {
 	}
 
 	player := NewPlayer(cfg)
+	downloader := NewDownloader()
 	ctx = &appCtx{
-		cfg:    cfg,
-		refs:   refs,
-		addons: LoadAddons(refs),
-		player: player,
+		cfg:        cfg,
+		refs:       refs,
+		addons:     LoadAddons(refs),
+		player:     player,
+		downloader: downloader,
 	}
 
 	root := newMenuScreen()
@@ -60,6 +65,7 @@ func main() {
 	prog := tea.NewProgram(model, tea.WithAltScreen())
 	ctx.prog = prog
 	player.Attach(prog)
+	downloader.Attach(prog)
 
 	if firstRun {
 		go prog.Send(toastMsg{text: "welcome — add your stream addons under 'addons'"})
