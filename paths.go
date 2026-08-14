@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 )
@@ -63,13 +64,32 @@ func defaultDownloadDir() string {
 	return filepath.Join(home, "Downloads", appName)
 }
 
-// expandHome turns a leading ~ into the home directory, since people type it
-// and os functions don't understand it.
-func expandHome(p string) string {
-	if p == "~" || strings.HasPrefix(p, "~/") {
+var winEnvVar = regexp.MustCompile(`%([A-Za-z_][A-Za-z0-9_]*)%`)
+
+// expandPath resolves what people actually type into a path field: a leading
+// ~, $HOME style variables, and on Windows %USERPROFILE% style ones, which
+// os.ExpandEnv doesn't understand.
+func expandPath(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+
+	if runtime.GOOS == "windows" {
+		p = winEnvVar.ReplaceAllStringFunc(p, func(m string) string {
+			if v := os.Getenv(strings.Trim(m, "%")); v != "" {
+				return v
+			}
+			return m
+		})
+	}
+	p = os.ExpandEnv(p)
+
+	if p == "~" || strings.HasPrefix(p, "~/") || strings.HasPrefix(p, `~\`) {
 		if home, err := os.UserHomeDir(); err == nil {
-			return filepath.Join(home, strings.TrimPrefix(strings.TrimPrefix(p, "~"), "/"))
+			rest := strings.TrimLeft(strings.TrimPrefix(p, "~"), `/\`)
+			return filepath.Join(home, rest)
 		}
 	}
-	return p
+	return filepath.Clean(p)
 }

@@ -473,9 +473,10 @@ func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			case 13:
 				return s, push(newPrompt("download location", defaultDownloadDir(), ctx.cfg.DownloadDir,
 					func(v string) tea.Cmd {
-						ctx.cfg.DownloadDir = expandHome(v)
+						ctx.cfg.DownloadDir = expandPath(v)
 						return s.save()
-					}, "~ is expanded · folders are created as needed"))
+					}, "~ and environment variables are expanded",
+					"folders are created as needed"))
 			case 14:
 				ctx.cfg.DownloadFolders = !ctx.cfg.DownloadFolders
 				return s, s.save()

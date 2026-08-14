@@ -127,6 +127,18 @@ func writePartInfo(final string, pi partInfo) {
 
 // ── Naming ────────────────────────────────────────────────────────────────────
 
+// winReserved are DOS device names that Windows still refuses as filenames.
+// A name is reserved on its base alone, so NUL.txt and NUL.tar.gz are both
+// the null device. Windows 11 relaxed most of this, but older versions
+// haven't, and applying it everywhere keeps a synced download folder portable.
+var winReserved = map[string]bool{
+	"con": true, "prn": true, "aux": true, "nul": true,
+	"com0": true, "com1": true, "com2": true, "com3": true, "com4": true,
+	"com5": true, "com6": true, "com7": true, "com8": true, "com9": true,
+	"lpt0": true, "lpt1": true, "lpt2": true, "lpt3": true, "lpt4": true,
+	"lpt5": true, "lpt6": true, "lpt7": true, "lpt8": true, "lpt9": true,
+}
+
 // safeName strips anything a filesystem would object to. The Windows set is
 // the strictest, so use it everywhere and keep filenames portable.
 func safeName(s string) string {
@@ -141,9 +153,17 @@ func safeName(s string) string {
 		return r
 	}, s)
 	s = strings.TrimSpace(s)
-	s = strings.Trim(s, ".") // trailing dots are invalid on Windows
+	s = strings.Trim(s, ".") // leading/trailing dots are stripped by Windows
 	if s == "" {
 		return "untitled"
+	}
+
+	base := s
+	if i := strings.IndexByte(base, '.'); i > 0 {
+		base = base[:i]
+	}
+	if winReserved[strings.ToLower(base)] {
+		s = "_" + s
 	}
 	return s
 }
@@ -164,7 +184,7 @@ func extFromURL(raw string) string {
 // Naming is pattern-driven so it can be changed without a rebuild.
 // Placeholders: {title} {year} {show} {season} {episode}
 //
-// Slashes are folder separators. When "organise downloads" is off only the
+// Either slash makes a folder separator. When "organise downloads" is off only the
 // last segment is used, so one setting controls depth for both patterns.
 const (
 	DefaultMoviePattern   = "Movies/({year}) {title}"
@@ -189,8 +209,13 @@ func expandPattern(pattern string, vals map[string]string) []string {
 		out = strings.ReplaceAll(out, "{"+k+"}", v)
 	}
 
+	// Either separator: a Windows user will reach for a backslash, and
+	// letting it fall through to safeName would turn the folder break into a
+	// literal "-" in the filename.
 	var segs []string
-	for _, seg := range strings.Split(out, "/") {
+	for _, seg := range strings.FieldsFunc(out, func(r rune) bool {
+		return r == '/' || r == '\\'
+	}) {
 		if seg = tidySegment(seg); seg != "" {
 			segs = append(segs, safeName(seg))
 		}
