@@ -391,6 +391,12 @@ type searchScreen struct {
 	cats   []string // "all" plus each category present in the results
 	catIdx int
 
+	// Set from the command line: preselect a category, and optionally open
+	// the first result without waiting for a keypress.
+	wantCat  string
+	autoOpen bool
+	autoDone bool
+
 	list   listModel
 	busy   busy
 	info   infoPane
@@ -398,11 +404,17 @@ type searchScreen struct {
 }
 
 func newSearchScreen(query string) *searchScreen {
+	return newSearchScreenWith(query, "", false)
+}
+
+// newSearchScreenWith backs the -s / -sf command line flags.
+func newSearchScreenWith(query, kind string, autoOpen bool) *searchScreen {
 	l := newList()
 	l.Empty = "nothing found"
 	return &searchScreen{
 		id: newAsyncID(), query: query, list: l,
 		busy: newBusy("searching…"), info: newInfoPane(),
+		wantCat: kind, autoOpen: autoOpen,
 	}
 }
 
@@ -463,7 +475,22 @@ func (s *searchScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.loaded = true
 		s.metas = m.metas
 		s.collectCats()
+
+		// Preselected category, if that kind came back at all.
+		if s.wantCat != "" {
+			for i, c := range s.cats {
+				if c == s.wantCat {
+					s.catIdx = i
+					break
+				}
+			}
+		}
 		s.rebuild()
+
+		if s.autoOpen && !s.autoDone && len(s.shown) > 0 {
+			s.autoDone = true
+			return s, push(openMeta(s.metas[s.shown[0]], 0))
+		}
 		return s, s.syncInfo()
 
 	case tea.WindowSizeMsg:

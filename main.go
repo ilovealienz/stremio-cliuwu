@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 
@@ -16,19 +17,77 @@ const appName = "stremio-cliuwu"
 // reports, which is more honest than a hardcoded number that goes stale.
 var version = "dev"
 
-func main() {
-	for _, arg := range os.Args[1:] {
-		switch arg {
+// launchOpts is what the command line asked for.
+type launchOpts struct {
+	search bool   // open search
+	first  bool   // …and jump into the first result
+	kind   string // movie | show | anime, empty for any
+	query  string
+}
+
+// parseArgs is hand-rolled rather than using the flag package so that
+// "-sf -a chuunibyou" reads the way you'd expect, and so the query can be
+// several words without quoting.
+func parseArgs(args []string) (launchOpts, bool) {
+	var o launchOpts
+	var words []string
+
+	for _, a := range args {
+		switch a {
 		case "--version", "-v":
 			fmt.Printf("%s %s\n", appName, version)
-			return
+			return o, false
 		case "--config":
 			fmt.Println(configDir())
-			return
+			return o, false
 		case "--help", "-h":
 			usage()
-			return
+			return o, false
+
+		case "-s", "--search":
+			o.search = true
+		case "-sf", "--search-first":
+			o.search, o.first = true, true
+		case "-m", "--movies":
+			o.kind = "movie"
+		case "-t", "--shows":
+			o.kind = "show"
+		case "-a", "--anime":
+			o.kind = "anime"
+
+		default:
+			if strings.HasPrefix(a, "-") {
+				fmt.Fprintf(os.Stderr, "unknown option %q\n\n", a)
+				usage()
+				return o, false
+			}
+			words = append(words, a)
 		}
+	}
+
+	o.query = strings.Join(words, " ")
+	return o, true
+}
+
+// startupCmd turns the parsed flags into the screen to open on launch.
+func startupCmd(o launchOpts) tea.Cmd {
+	label := map[string]string{"movie": "movies", "show": "shows", "anime": "anime"}
+
+	switch {
+	case o.query != "":
+		return push(newSearchScreenWith(o.query, o.kind, o.first))
+	case o.search:
+		return push(searchPrompt())
+	case o.kind != "":
+		return browseKind(o.kind, label[o.kind])
+	}
+	return nil
+}
+
+func main() {
+	opts, run := parseArgs(os.Args[1:])
+	if !run {
+		return
 	}
 
 	cfg := LoadConfig()
@@ -59,8 +118,8 @@ func main() {
 		downloader: downloader,
 	}
 
-	root := newMenuScreen()
-	model := newApp(root)
+	model := newApp(newMenuScreen())
+	model.setStartup(startupCmd(opts))
 
 	prog := tea.NewProgram(model, tea.WithAltScreen())
 	ctx.prog = prog
@@ -115,18 +174,29 @@ func usage() {
   a terminal stremio client — no account, just addon manifest urls
 
   usage:
-    %s              launch the tui
-    %s --version    print version
-    %s --config     print the config directory
+    %s [options] [search terms]
+
+  options:
+    -s,  --search          open search
+    -sf, --search-first    search and open the first result
+    -m,  --movies          movies
+    -t,  --shows           tv shows
+    -a,  --anime           anime
+    -v,  --version         print version
+         --config          print the config directory
+    -h,  --help            this
+
+  examples:
+    %s                     the main menu
+    %s -a                  browse anime
+    %s -s                  straight to the search box
+    %s chuunibyou          search for it
+    %s -sf -a chuunibyou   search anime, open the first hit
 
   config lives in %s
-    config.json     mpv path, quality preference, autoplay
+    config.json     mpv path, quality preference, downloads, appearance
     addons.json     your addon manifest urls (mode 0600)
     favourites.json
     history.json
-
-  add addons from the 'addons' screen, e.g.
-    https://v3-cinemeta.strem.io/manifest.json
-    https://torrentio.strem.fun/torbox=<key>/manifest.json
-`, appName, version, appName, appName, appName, configDir())
+`, appName, version, appName, appName, appName, appName, appName, appName, configDir())
 }

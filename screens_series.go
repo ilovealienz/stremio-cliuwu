@@ -35,6 +35,7 @@ type seasonScreen struct {
 
 	list   listModel
 	busy   busy
+	info   infoPane
 	loaded bool
 }
 
@@ -43,9 +44,18 @@ func newSeasonScreen(m Meta, jumpTo int) *seasonScreen {
 	l.Empty = "no season data"
 	return &seasonScreen{
 		id: newAsyncID(), show: m, jumpTo: jumpTo,
-		list: l, busy: newBusy("fetching episode list…"),
+		list: l, busy: newBusy("fetching episode list…"), info: newInfoPane(),
 	}
 }
+
+func (s *seasonScreen) layout() {
+	s.list.SetSize(paneLayout(s.w, &s.info), s.h)
+	s.info.SetSize(paneSize(s.w, &s.info), s.h, !s.info.Split(s.w))
+}
+
+// syncInfo shows the series itself — the subject doesn't change as you move
+// between seasons, so this only has anything to do the first time.
+func (s *seasonScreen) syncInfo() tea.Cmd { return s.info.Show(s.show) }
 
 func (s *seasonScreen) Init() tea.Cmd {
 	id, m := s.id, s.show
@@ -74,12 +84,14 @@ func (s *seasonScreen) Typing() bool  { return s.list.Typing() }
 
 func (s *seasonScreen) SetSize(w, h int) {
 	s.baseScreen.SetSize(w, h)
-	s.list.SetSize(w, h)
+	s.info.AutoFit(w)
+	s.layout()
 }
 
 func (s *seasonScreen) Footer() string {
 	return keyHint(
 		[2]string{"enter", "episodes"},
+		[2]string{"i", "info"},
 		[2]string{"f", "favourite show"},
 		[2]string{"w", "mark season"},
 		[2]string{"b/esc", "back"},
@@ -133,6 +145,9 @@ func (s *seasonScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.loaded = true
 		s.sm, s.seasons = m.sm, m.seasons
 		s.rebuild()
+		if cmd := s.syncInfo(); cmd != nil {
+			return s, cmd
+		}
 		if s.jumpTo > 0 && !s.jumped {
 			s.jumped = true
 			for i, season := range s.seasons {
@@ -157,11 +172,23 @@ func (s *seasonScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return s, nil
 
+	case tea.WindowSizeMsg:
+		return s, s.syncInfo()
+
 	case tea.KeyMsg:
+		if !s.list.Typing() {
+			if cmd, done := infoKeys(&s.info, s.w, s.h, m); done {
+				return s, cmd
+			}
+		}
 		if consumed, cmd := s.list.Update(msg); consumed {
 			return s, cmd
 		}
 		switch m.String() {
+		case "i":
+			s.info.Toggle()
+			s.layout()
+			return s, s.syncInfo()
 		case "enter":
 			if i := s.list.Selected(); i >= 0 {
 				return s, push(newEpisodeScreen(s.show, s.sm, s.seasons[i]))
@@ -206,14 +233,17 @@ func (s *seasonScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, popRoot()
 		}
 	}
-	return s, s.busy.update(msg)
+	return s, tea.Batch(s.busy.update(msg), s.info.Update(msg))
 }
 
 func (s *seasonScreen) View() string {
 	if !s.loaded {
 		return s.busy.view()
 	}
-	return s.list.View()
+	if s.info.On() && !s.info.Split(s.w) {
+		return s.info.View()
+	}
+	return joinPane(s.list.View(), paneLayout(s.w, &s.info), &s.info)
 }
 
 // ── Episode list ──────────────────────────────────────────────────────────────
@@ -233,6 +263,7 @@ type episodeScreen struct {
 
 	list   listModel
 	busy   busy
+	info   infoPane
 	loaded bool
 }
 
@@ -241,8 +272,23 @@ func newEpisodeScreen(m Meta, sm SeriesMeta, season int) *episodeScreen {
 	l.Empty = "no episodes"
 	return &episodeScreen{
 		id: newAsyncID(), show: m, sm: sm, season: season,
-		list: l, busy: newBusy("loading episodes…"),
+		list: l, busy: newBusy("loading episodes…"), info: newInfoPane(),
 	}
+}
+
+func (s *episodeScreen) layout() {
+	s.list.SetSize(paneLayout(s.w, &s.info), s.h)
+	s.info.SetSize(paneSize(s.w, &s.info), s.h, !s.info.Split(s.w))
+}
+
+// syncInfo shows the highlighted episode. No fetch — GetSeriesMeta already
+// pulled the overviews down with the episode list.
+func (s *episodeScreen) syncInfo() tea.Cmd {
+	i := s.list.Selected()
+	if i < 0 || i >= len(s.eps) {
+		return nil
+	}
+	return s.info.ShowEpisode(s.show.Name, s.eps[i])
 }
 
 func (s *episodeScreen) Init() tea.Cmd {
@@ -260,12 +306,14 @@ func (s *episodeScreen) Typing() bool  { return s.list.Typing() }
 
 func (s *episodeScreen) SetSize(w, h int) {
 	s.baseScreen.SetSize(w, h)
-	s.list.SetSize(w, h)
+	s.info.AutoFit(w)
+	s.layout()
 }
 
 func (s *episodeScreen) Footer() string {
 	return keyHint(
 		[2]string{"enter", "streams"},
+		[2]string{"i", "info"},
 		[2]string{"f", "favourite season"},
 		[2]string{"w", "watched"},
 		[2]string{"W", "whole season"},
@@ -343,7 +391,7 @@ func (s *episodeScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 
 		s.list.Focus(s.firstUnwatched())
-		return s, nil
+		return s, s.syncInfo()
 
 	case PlayerStateMsg:
 		if s.loaded {
@@ -355,11 +403,24 @@ func (s *episodeScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		return s, nil
 
+	case tea.WindowSizeMsg:
+		return s, s.syncInfo()
+
 	case tea.KeyMsg:
+		if !s.list.Typing() {
+			if cmd, done := infoKeys(&s.info, s.w, s.h, m); done {
+				return s, cmd
+			}
+		}
 		if consumed, cmd := s.list.Update(msg); consumed {
-			return s, cmd
+			// Cursor moved — the panel follows the highlighted episode.
+			return s, tea.Batch(cmd, s.syncInfo())
 		}
 		switch m.String() {
+		case "i":
+			s.info.Toggle()
+			s.layout()
+			return s, s.syncInfo()
 		case "enter":
 			i := s.list.Selected()
 			if i < 0 {
@@ -415,7 +476,7 @@ func (s *episodeScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, popRoot()
 		}
 	}
-	return s, s.busy.update(msg)
+	return s, tea.Batch(s.busy.update(msg), s.info.Update(msg))
 }
 
 // streamFor builds the stream picker for episode index i.
@@ -438,5 +499,8 @@ func (s *episodeScreen) View() string {
 	if !s.loaded {
 		return s.busy.view()
 	}
-	return s.list.View()
+	if s.info.On() && !s.info.Split(s.w) {
+		return s.info.View()
+	}
+	return joinPane(s.list.View(), paneLayout(s.w, &s.info), &s.info)
 }

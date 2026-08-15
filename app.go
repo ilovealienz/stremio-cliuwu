@@ -105,13 +105,24 @@ type app struct {
 	toastText string
 	toastErr  bool
 	toastAt   time.Time
+
+	startup tea.Cmd
 }
 
 func newApp(root screen) *app { return &app{stack: []screen{root}} }
 
+// startup runs once the program is up: used to jump straight to a search or a
+// catalog from the command line.
+func (a *app) setStartup(cmd tea.Cmd) { a.startup = cmd }
+
 func (a *app) top() screen { return a.stack[len(a.stack)-1] }
 
-func (a *app) Init() tea.Cmd { return a.top().Init() }
+func (a *app) Init() tea.Cmd {
+	if a.startup != nil {
+		return tea.Batch(a.top().Init(), a.startup)
+	}
+	return a.top().Init()
+}
 
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch m := msg.(type) {
@@ -186,12 +197,12 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.stack = a.stack[:len(a.stack)-1]
 		}
 		a.resize()
-		return a, nil
+		return a, a.refreshTop()
 
 	case popRootMsg:
 		a.stack = a.stack[:1]
 		a.resize()
-		return a, nil
+		return a, a.refreshTop()
 
 	case replaceMsg:
 		m.s.SetSize(a.w, a.bodyHeight())
@@ -279,6 +290,21 @@ func (a *app) advanceTo(prev PlayRequest, prefix string) tea.Cmd {
 	go GetStreams(addons, "series", videoID) // warm the cache, don't navigate
 
 	return toast(prefix + t.Label + " · ready when you are")
+}
+
+// refreshTop rebuilds whichever screen we've just come back to.
+//
+// Screens cache their rows, and only the top screen receives messages — so a
+// buried screen misses everything that happened while it was buried. The main
+// menu is the obvious casualty: it sits at the bottom of the stack from
+// startup, so its continue-watching entry stayed frozen at whatever it said
+// when the app launched, even though history was being written correctly all
+// along.
+func (a *app) refreshTop() tea.Cmd {
+	if r, ok := a.top().(rebuildable); ok {
+		r.rebuild()
+	}
+	return nil
 }
 
 // quitCmd confirms first when something is playing, since quitting takes mpv

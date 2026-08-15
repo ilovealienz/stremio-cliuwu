@@ -41,6 +41,11 @@ type infoPane struct {
 	poster   string // rendered half-block art
 	gen      int    // poster size generation this was rendered at
 
+	// Episode mode: rendered straight from the season's video list, which
+	// GetSeriesMeta already fetched. No request, no cache, no async.
+	ep     *Video
+	epShow string
+
 	full    bool // taking over the whole screen rather than sitting beside
 	indent  int  // left margin, used when centred
 	offset  int  // first visible line
@@ -123,6 +128,7 @@ func (p *infoPane) Show(m Meta) tea.Cmd {
 	p.forID = m.ID
 	p.loaded = false
 	p.detail = MetaDetail{}
+	p.ep = nil
 	p.poster = ""
 	p.offset = 0
 
@@ -141,6 +147,24 @@ func (p *infoPane) Show(m Meta) tea.Cmd {
 			return metaDetailMsg{id: id, metaID: metaID, detail: d, ok: ok}
 		},
 	)
+}
+
+// ShowEpisode switches the panel to an episode. Everything it needs is
+// already in hand, so unlike Show there's nothing to fetch.
+func (p *infoPane) ShowEpisode(show string, v Video) tea.Cmd {
+	if !p.on || v.ID == "" || v.ID == p.forID {
+		return nil
+	}
+
+	p.forID = v.ID
+	p.ep = &v
+	p.epShow = show
+	p.detail = MetaDetail{}
+	p.poster = ""
+	p.loaded = true
+	p.offset = 0
+	p.busy.stop()
+	return nil
 }
 
 func (p *infoPane) Update(msg tea.Msg) tea.Cmd {
@@ -238,6 +262,10 @@ func (p *infoPane) render() string {
 		return p.busy.view()
 	}
 
+	if p.ep != nil {
+		return p.renderEpisode()
+	}
+
 	d := p.detail
 	if d.Name == "" {
 		return stHint.Render("no details available")
@@ -261,7 +289,13 @@ func (p *infoPane) render() string {
 		head = append(head, "")
 	}
 
-	head = append(head, lines(wrap.Render(stTitle.Render(d.Name)))...)
+	// Wrap first, then style each line. Styling the whole string and wrapping
+	// afterwards leaves the escape at the start of line one, so a title that
+	// runs onto a second line renders that line unstyled — it ends up looking
+	// like the synopsis below it.
+	for _, ln := range lines(wrap.Render(d.Name)) {
+		head = append(head, stTitle.Render(ln))
+	}
 
 	var facts []string
 	if d.ReleaseInfo != "" {
@@ -277,7 +311,9 @@ func (p *infoPane) render() string {
 		head = append(head, stKey.Render(strings.Join(facts, "  ·  ")))
 	}
 	if g := d.AllGenres(); len(g) > 0 {
-		head = append(head, lines(stSub.Render(wrap.Render(strings.Join(g, ", "))))...)
+		for _, ln := range lines(wrap.Render(strings.Join(g, ", "))) {
+			head = append(head, stSub.Render(ln))
+		}
 	}
 
 	if d.Description != "" {
@@ -307,6 +343,45 @@ func (p *infoPane) render() string {
 
 // posterLink renders the OSC 8 hyperlink to the full-size image, with the
 // label trimmed to whatever the panel width allows.
+// renderEpisode draws the panel for a single episode. Video carries only
+// title, air date and overview — no rating, runtime or cast — so this is
+// deliberately sparser than the title panel.
+func (p *infoPane) renderEpisode() string {
+	v := *p.ep
+	wrap := lipgloss.NewStyle().Width(p.w)
+	lines := func(s string) []string { return strings.Split(s, "\n") }
+
+	var out []string
+
+	for _, ln := range lines(wrap.Render(fmtVideoID(v.ID))) {
+		out = append(out, stKey.Render(ln))
+	}
+	if v.Title != "" {
+		for _, ln := range lines(wrap.Render(v.Title)) {
+			out = append(out, stTitle.Render(ln))
+		}
+	}
+	if p.epShow != "" {
+		out = append(out, stSub.Render(p.epShow))
+	}
+
+	if r := fmtRelease(v.Released); r != "" {
+		if videoAired(v) {
+			out = append(out, stSub.Render("aired "+r))
+		} else {
+			out = append(out, stWarn.Render("○ airs "+r))
+		}
+	}
+
+	if v.Overview != "" {
+		out = append(out, "")
+		out = append(out, lines(wrap.Render(v.Overview))...)
+	} else {
+		out = append(out, "", stHint.Render("no synopsis for this episode"))
+	}
+	return strings.Join(out, "\n")
+}
+
 // posterLink is a keybinding hint, not a hyperlink.
 //
 // OSC 8 terminal links can't be used here: lipgloss understands CSI escapes

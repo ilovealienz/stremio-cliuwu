@@ -494,13 +494,32 @@ func (l *listModel) row(vi int, selected bool) string {
 	}
 
 	label := it.Label
-	if it.Dim {
+	switch {
+	case it.Dim:
 		label = grey(stripANSI(label))
+	case selected:
+		// Whole-row emphasis. A lone cursor glyph is easy to lose track of on
+		// a wide terminal, where your eye is nearer the middle of the line
+		// than the left edge. This flattens the row's own colouring, which is
+		// the trade: one clearly highlighted row beats a subtle one.
+		label = stCursor.Render(stripANSI(label))
 	}
 
 	left := marker + num + tick + label
+
 	if it.Sub != "" {
-		left += "  " + stSub.Render(stripANSI(it.Sub))
+		sub := it.Sub
+		// Only style a sub that isn't styled already — stripping first threw
+		// away things like the download progress bar's colours and rendered
+		// every one of them flat grey.
+		if stripANSI(sub) == sub {
+			st := stSub
+			if selected {
+				st = stSelected
+			}
+			sub = st.Render(sub)
+		}
+		left += "  " + sub
 	}
 
 	badge := it.Badge
