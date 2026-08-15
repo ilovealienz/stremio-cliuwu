@@ -145,9 +145,13 @@ func (s *seasonScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.loaded = true
 		s.sm, s.seasons = m.sm, m.seasons
 		s.rebuild()
-		if cmd := s.syncInfo(); cmd != nil {
-			return s, cmd
-		}
+
+		// Batched, not returned early: syncInfo hands back a command whenever
+		// the panel is open, and returning on it skipped the jump below —
+		// so continue, next up and favourited seasons all stopped drilling
+		// in and left you on the season list.
+		infoCmd := s.syncInfo()
+
 		if s.jumpTo > 0 && !s.jumped {
 			s.jumped = true
 			for i, season := range s.seasons {
@@ -156,11 +160,11 @@ func (s *seasonScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 					es := newEpisodeScreen(s.show, s.sm, s.jumpTo)
 					es.autoEpisode = s.autoEpisode
 					es.autoResume = s.autoResume
-					return s, push(es)
+					return s, tea.Batch(infoCmd, push(es))
 				}
 			}
 		}
-		return s, nil
+		return s, infoCmd
 
 	case PlayerStateMsg:
 		if s.loaded {
