@@ -87,6 +87,9 @@ func themeChanged() tea.Cmd { return func() tea.Msg { return themeChangedMsg{} }
 // rebuildable is any screen that can regenerate its rows on demand.
 type rebuildable interface{ rebuild() }
 
+// resyncable is any screen with an info panel to refresh.
+type resyncable interface{ syncInfo() tea.Cmd }
+
 func push(s screen) tea.Cmd    { return func() tea.Msg { return pushMsg{s} } }
 func pop() tea.Cmd             { return func() tea.Msg { return popMsg{1} } }
 func popN(n int) tea.Cmd       { return func() tea.Msg { return popMsg{n} } }
@@ -303,6 +306,12 @@ func (a *app) advanceTo(prev PlayRequest, prefix string) tea.Cmd {
 func (a *app) refreshTop() tea.Cmd {
 	if r, ok := a.top().(rebuildable); ok {
 		r.rebuild()
+	}
+	// Panels are refreshed too: a screen that was skipped past on the way in
+	// never got to load its own info, and one that sat buried may be showing
+	// something stale.
+	if r, ok := a.top().(resyncable); ok {
+		return r.syncInfo()
 	}
 	return nil
 }
