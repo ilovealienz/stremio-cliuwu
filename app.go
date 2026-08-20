@@ -263,6 +263,7 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// this a reorder wouldn't take effect until the five minute TTL ran
 		// out — which reads as the reorder having done nothing.
 		cacheStreams.Clear()
+		cacheSubs.Clear()
 		return a, nil
 
 	case tea.KeyMsg:

@@ -427,12 +427,19 @@ func (s *settingsScreen) rebuild() {
 		}},
 		{label: "subtitle language", sub: "preferred track, and where S opens",
 			badge: orDash(c.SubtitleLang), act: func() tea.Cmd {
-				return s.prompt("subtitle language", "eng", ctx.cfg.SubtitleLang, func(v string) tea.Cmd {
-					ctx.cfg.SubtitleLang = v
-					return s.save()
-				},
-					"code or name — eng, en and English all work",
-					"passed to mpv as --slang, and preselected in the S picker")
+				help := []string{
+					"comma-separated for a preference order, e.g. eng, spa",
+					"the name works too, and regional variants fold in: en-GB is English",
+					"passed to mpv as --slang, and preselected in the S picker",
+					"",
+				}
+				help = append(help, LangReference()...)
+
+				return s.prompt("subtitle language", "eng, en, English", ctx.cfg.SubtitleLang,
+					func(v string) tea.Cmd {
+						ctx.cfg.SubtitleLang = v
+						return s.save()
+					}, help...)
 			}},
 		{label: "ask to resume", sub: "off always starts from the beginning", badge: onOff(c.AutoResume), act: func() tea.Cmd {
 			ctx.cfg.AutoResume = !ctx.cfg.AutoResume

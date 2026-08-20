@@ -351,16 +351,27 @@ func (q *EpQueue) HasNext() bool {
 
 // Next returns the following episode and its season, rolling over into the
 // next season when the current one runs out.
+// Next is the episode to play after this one, or nothing when it isn't out
+// yet — autoplay and prefetch both depend on that.
 func (q *EpQueue) Next() (Video, int, bool) {
+	v, season, ok := q.Upcoming()
+	if !ok || !videoAired(v) {
+		return Video{}, 0, false
+	}
+	return v, season, true
+}
+
+// Upcoming is the episode after this one whether or not it has aired.
+//
+// Split from Next because the two questions differ: you can't play an episode
+// that isn't out, but you still want to be told it's coming. Folding them
+// together made a season read as finished the moment you caught up with it.
+func (q *EpQueue) Upcoming() (Video, int, bool) {
 	if q == nil {
 		return Video{}, 0, false
 	}
 	if q.Index+1 < len(q.Episodes) {
-		v := q.Episodes[q.Index+1]
-		if !videoAired(v) {
-			return Video{}, 0, false // not out yet — nothing to queue
-		}
-		return v, q.Season, true
+		return q.Episodes[q.Index+1], q.Season, true
 	}
 
 	// Lowest season above this one…
@@ -382,9 +393,6 @@ func (q *EpQueue) Next() (Video, int, bool) {
 			first, found = v, true
 		}
 	}
-	if found && !videoAired(first) {
-		return Video{}, 0, false
-	}
 	return first, next, found
 }
 
@@ -405,7 +413,7 @@ func (q *EpQueue) SeasonEpisodes(season int) []Video {
 // configVersion is bumped whenever a new field needs a non-zero default.
 // Without this, adding a bool to the struct silently gives every existing
 // install `false`, because encoding/json just leaves absent fields alone.
-const configVersion = 10
+const configVersion = 11
 
 type AppConfig struct {
 	Version          int    `json:"version"`
@@ -492,6 +500,17 @@ func (c *AppConfig) SetDefaults() bool {
 		changed = true
 	}
 
+	// A default rather than blank: an unset language leaves the subtitle
+	// picker opening on "all", which is the state every edge case shows up
+	// in. Clear it deliberately and it stays clear.
+	if c.Version < 11 && c.SubtitleLang == "" {
+		// Spelled out rather than just "eng": all three resolve to English
+		// anyway, but seeing the list in the setting is what tells you it
+		// takes a list at all.
+		c.SubtitleLang = "eng, en, English"
+		changed = true
+	}
+
 	if c.HistoryMax <= 0 {
 		c.HistoryMax = 300
 		changed = true
@@ -546,6 +565,7 @@ type HistoryEntry struct {
 	NextSeason   int    `json:"next_season,omitempty"`
 	NextEpisode  int    `json:"next_episode,omitempty"`
 	NextTitle    string `json:"next_title,omitempty"`
+	NextReleased string `json:"next_released,omitempty"`
 }
 
 type HistoryList struct {

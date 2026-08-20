@@ -67,7 +67,8 @@ func (s *subsScreen) Footer() string {
 	if len(s.langs) > 2 {
 		pairs = append(pairs, [2]string{"tab", "language"})
 	}
-	pairs = append(pairs, [2]string{"/", "filter"}, [2]string{"b/esc", "back"})
+	pairs = append(pairs, [2]string{"R", "refetch"}, [2]string{"/", "filter"},
+		[2]string{"b/esc", "back"})
 	return withStatus(s.list.Status(), keyHint(pairs...))
 }
 
@@ -208,6 +209,11 @@ func (s *subsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				pop(),
 			)
 
+		case "R":
+			cacheSubs.Delete(s.target.MediaType + ":" + s.target.VideoID)
+			s.loaded = false
+			s.id = newAsyncID()
+			return s, s.Init()
 		case "tab":
 			if len(s.langs) > 1 {
 				s.langIx = (s.langIx + 1) % len(s.langs)
