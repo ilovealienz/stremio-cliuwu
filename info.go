@@ -107,7 +107,7 @@ func PaneWidth(total int) int {
 	if total < minSplitWidth {
 		return 0
 	}
-	return min(46, total/3)
+	return min(56, total/3)
 }
 
 // Split reports whether the pane can sit beside the list at this width.
@@ -222,34 +222,35 @@ func (p *infoPane) View() string {
 
 	all := strings.Split(p.render(), "\n")
 
-	maxOff := max(0, len(all)-p.h)
-	p.overflow = maxOff > 0
+	// The scroll indicator gets a row of its own. Writing it over the last
+	// line meant losing a line of content every time it appeared, which is
+	// exactly when you can least afford it.
+	avail := p.h
+	p.overflow = len(all) > avail
+	if p.overflow {
+		avail = p.h - 1
+	}
+
+	maxOff := max(0, len(all)-avail)
 	if p.offset > maxOff {
 		p.offset = maxOff
 	}
 
-	lines := append([]string(nil), all[p.offset:min(len(all), p.offset+p.h)]...)
-	for len(lines) < p.h {
+	lines := append([]string(nil), all[p.offset:min(len(all), p.offset+avail)]...)
+	for len(lines) < avail {
 		lines = append(lines, "")
 	}
 
-	// Every line is terminated explicitly. Poster rows carry truecolor
-	// background escapes, and clamp can drop a trailing reset that sits past
-	// the content width — the colour then bleeds onto the next terminal line,
-	// which is a list row, and it renders in the leaked style.
 	pad := strings.Repeat(" ", p.indent)
 	for i, l := range lines {
 		lines[i] = pad + clamp(l, p.w) + cReset
 	}
 
-	// Scroll position on the last row, so it's obvious there's more.
-	if p.overflow && len(lines) > 0 {
-		marker := stHint.Render(fmt.Sprintf("%d/%d  J/K", p.offset+p.h, len(all)))
-		gap := p.w - lipgloss.Width(marker)
-		if gap < 0 {
-			gap = 0
-		}
-		lines[len(lines)-1] = pad + strings.Repeat(" ", gap) + marker
+	if p.overflow {
+		shown := min(p.offset+avail, len(all))
+		marker := stHint.Render(fmt.Sprintf("%d/%d  J/K", shown, len(all)))
+		gap := max(0, p.w-lipgloss.Width(marker))
+		lines = append(lines, pad+strings.Repeat(" ", gap)+marker+cReset)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -369,7 +370,11 @@ func (p *infoPane) renderEpisode() string {
 		if videoAired(v) {
 			out = append(out, stSub.Render("aired "+r))
 		} else {
-			out = append(out, stWarn.Render("○ airs "+r))
+			line := "○ airs " + r
+			if when := untilRelease(v.Released); when != "" {
+				line += "  ·  " + when
+			}
+			out = append(out, stWarn.Render(line))
 		}
 	}
 

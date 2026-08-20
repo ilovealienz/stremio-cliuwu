@@ -38,8 +38,8 @@ func (s *catalogPickerScreen) SetSize(w, h int) {
 }
 
 func (s *catalogPickerScreen) Footer() string {
-	return keyHint([2]string{"enter", "browse"}, [2]string{"/", "filter"}, [2]string{"b/esc", "back"}) +
-		"   " + stHint.Render(s.list.Status())
+	return withStatus(s.list.Status(),
+		keyHint([2]string{"enter", "browse"}, [2]string{"/", "filter"}, [2]string{"b/esc", "back"}))
 }
 
 func (s *catalogPickerScreen) rebuild() {
@@ -145,8 +145,8 @@ func (s *genrePickerScreen) Init() tea.Cmd  { return nil }
 func (s *genrePickerScreen) Title() string  { return "genre" }
 func (s *genrePickerScreen) Typing() bool   { return s.list.Typing() }
 func (s *genrePickerScreen) Footer() string {
-	return keyHint([2]string{"enter", "choose"}, [2]string{"/", "filter"}, [2]string{"b/esc", "back"}) +
-		"   " + stHint.Render(s.list.Status())
+	return withStatus(s.list.Status(),
+		keyHint([2]string{"enter", "choose"}, [2]string{"/", "filter"}, [2]string{"b/esc", "back"}))
 }
 
 func (s *genrePickerScreen) SetSize(w, h int) {
@@ -192,10 +192,11 @@ type catalogScreen struct {
 	metas   []Meta
 	hasMore bool
 
-	list   listModel
-	busy   busy
-	info   infoPane
-	loaded bool
+	list        listModel
+	busy        busy
+	info        infoPane
+	loaded      bool
+	loadingMore bool
 }
 
 func newCatalogScreen(ref CatalogRef) *catalogScreen {
@@ -220,8 +221,8 @@ func (s *catalogScreen) syncInfo() tea.Cmd {
 		return nil
 	}
 	i := s.list.Selected()
-	if i < 0 || i >= len(s.metas) {
-		return nil
+	if i < 0 || s.moreRow(i) {
+		return nil // the load-more row has nothing to describe
 	}
 	return s.info.Show(s.metas[i])
 }
@@ -247,6 +248,7 @@ func (s *catalogScreen) setGenre(g string) tea.Cmd {
 
 func (s *catalogScreen) loadPage(skip int) tea.Cmd {
 	s.id = newAsyncID()
+	s.loadingMore = skip > 0
 	id, ref, genre := s.id, s.ref, s.genre
 	what := ref.Name
 	if genre != "" {
@@ -281,20 +283,40 @@ func (s *catalogScreen) Footer() string {
 	if len(s.ref.Genres) > 0 {
 		pairs = append(pairs, [2]string{"g", "genre"})
 	}
-	if s.hasMore {
-		pairs = append(pairs, [2]string{"m", "load more"})
-	}
 	pairs = append(pairs, [2]string{"b/esc", "back"})
-	return keyHint(pairs...) + "   " + stHint.Render(s.list.Status())
+	return withStatus(s.list.Status(), keyHint(pairs...))
 }
 
 func (s *catalogScreen) rebuild() {
-	items := make([]Item, len(s.metas))
-	for i, m := range s.metas {
-		items[i] = metaItem(m)
+	items := make([]Item, 0, len(s.metas)+1)
+	for _, m := range s.metas {
+		items = append(items, metaItem(m))
+	}
+
+	// A row rather than a keybinding: reaching the bottom of a list and being
+	// expected to know about `m` isn't discoverable, and the row can say what
+	// it's going to do.
+	if s.hasMore {
+		if s.loadingMore {
+			items = append(items, Item{
+				Label: stHint.Render("loading…"),
+				Dim:   true,
+			})
+		} else {
+			// Spelled out as an instruction rather than a label: "load more…"
+			// reads as a status line, and there's nothing to suggest the row
+			// is something you act on.
+			items = append(items, Item{
+				Label: stHint.Render("press ") + stKey.Render("enter") + stHint.Render(" to load more"),
+				Badge: grey(fmt.Sprintf("%d loaded", len(s.metas))),
+			})
+		}
 	}
 	s.list.SetItems(items)
 }
+
+// moreRow reports whether an index is the load-more row rather than a title.
+func (s *catalogScreen) moreRow(i int) bool { return i >= len(s.metas) }
 
 func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	switch m := msg.(type) {
@@ -307,9 +329,17 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		if m.err != nil {
 			return s, toastErr(m.err.Error())
 		}
+		was := len(s.metas)
 		s.metas = append(s.metas, m.metas...)
 		s.hasMore = m.hasMore && len(m.metas) > 0
+		s.loadingMore = false
 		s.rebuild()
+
+		// Land on the first of the new rows, so loading more continues where
+		// you were reading rather than dumping you back at the top.
+		if was > 0 && len(s.metas) > was {
+			s.list.Focus(was)
+		}
 		return s, s.syncInfo()
 
 	case tea.KeyMsg:
@@ -335,18 +365,22 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			s.layout()
 			return s, s.syncInfo()
 		case "enter":
-			if i := s.list.Selected(); i >= 0 {
-				return s, push(openMeta(s.metas[i], 0))
+			i := s.list.Selected()
+			if i < 0 {
+				return s, nil
 			}
+			if s.moreRow(i) {
+				if s.loadingMore {
+					return s, nil
+				}
+				return s, s.loadPage(len(s.metas))
+			}
+			return s, push(openMeta(s.metas[i], 0))
 		case "f":
-			if i := s.list.Selected(); i >= 0 {
+			if i := s.list.Selected(); i >= 0 && !s.moreRow(i) {
 				mt := s.metas[i]
 				AddFav(Favourite{Name: mt.Name, ID: mt.ID, Type: mt.Type, Source: mt.Source, Year: mt.Year})
 				return s, toast("favourited " + mt.Name)
-			}
-		case "m":
-			if s.hasMore {
-				return s, s.loadPage(len(s.metas))
 			}
 		case "esc", "backspace":
 			return s, pop()
@@ -454,7 +488,7 @@ func (s *searchScreen) SetSize(w, h int) {
 }
 
 func (s *searchScreen) Footer() string {
-	return keyHint(
+	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "open"},
 		[2]string{"i", "info"},
 		[2]string{"J/K", "scroll"},
@@ -462,7 +496,7 @@ func (s *searchScreen) Footer() string {
 		[2]string{"f", "favourite"},
 		[2]string{"/", "filter"},
 		[2]string{"b/esc", "back"},
-	) + "   " + stHint.Render(s.list.Status())
+	))
 }
 
 func (s *searchScreen) Update(msg tea.Msg) (screen, tea.Cmd) {

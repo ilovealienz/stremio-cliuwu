@@ -21,26 +21,67 @@ type menuScreen struct {
 	list    listModel
 	entries []menuEntry
 	resume  *ContinueItem
+	panel   continuePanel
+	fetched string // videoID the panel's episode info belongs to
 }
 
 func newMenuScreen() *menuScreen {
-	s := &menuScreen{list: newList()}
+	s := &menuScreen{list: newList(), panel: newContinuePanel()}
 	s.rebuild()
 	return s
 }
 
-func (s *menuScreen) Init() tea.Cmd { return nil }
+func (s *menuScreen) layout() {
+	s.list.SetSize(continuePanelLayout(s.w, &s.panel), s.h)
+	s.panel.SetSize(PaneWidth(s.w), s.h)
+}
+
+func (s *menuScreen) Init() tea.Cmd { return s.fetchTargetInfo() }
+
+// syncInfo satisfies resyncable, so returning to the menu reloads the panel's
+// synopsis. Deleting a history entry changes what w resumes, and without this
+// the new target sat there with a title and no summary until something else
+// happened to trigger a fetch.
+func (s *menuScreen) syncInfo() tea.Cmd { return s.fetchTargetInfo() }
+
+// fetchTargetInfo loads the synopsis for whatever w would resume, once per
+// title. Returns nil when the panel already has the right one, so this can be
+// called from anywhere without worrying about repeat requests.
+func (s *menuScreen) fetchTargetInfo() tea.Cmd {
+	e, ok := s.panel.NextEntry()
+	if !ok {
+		return nil
+	}
+
+	// Same key the panel uses to decide whether a result belongs to what's
+	// on screen — if these two disagreed, the fetch would fire and the result
+	// would then be rejected as stale.
+	key := targetKey(e)
+	if key == "" || key == s.fetched {
+		return nil
+	}
+
+	s.fetched = key
+	return FetchTargetInfo(e)
+}
 
 func (s *menuScreen) Title() string { return "" }
 func (s *menuScreen) Typing() bool  { return false }
 
 func (s *menuScreen) SetSize(w, h int) {
 	s.baseScreen.SetSize(w, h)
-	s.list.SetSize(w, h)
+	s.panel.AutoFit(w)
+	s.layout()
+	s.panel.Refresh()
 }
 
 func (s *menuScreen) Footer() string {
-	return keyHint([2]string{"enter", "open"}, [2]string{"ctrl+q", "quit"})
+	pairs := [][2]string{{"enter", "open"}}
+	if n := s.panel.Count(); n > 0 && s.panel.On() {
+		pairs = append(pairs, [2]string{fmt.Sprintf("1-%d", min(n, 9)), "resume"})
+	}
+	pairs = append(pairs, [2]string{"i", "panel"}, [2]string{"ctrl+q", "quit"})
+	return keyHint(pairs...)
 }
 
 // padPlain pads to n columns measured on the text with escapes stripped.
@@ -123,6 +164,10 @@ func (s *menuScreen) rebuild() {
 
 	// Browse entries come from the installed addons now, so only offer the
 	// buckets that actually have catalogs behind them.
+	// A header, so the cursor skips it and there's nothing to press.
+	if ctx.loading {
+		s.entries = append(s.entries, menuEntry{head: "loading addons…"})
+	}
 	counts := KindsAvailable(ctx.addons)
 	for _, b := range []struct{ key, kind, label string }{
 		{"m", "movie", "movies"},
@@ -180,6 +225,7 @@ func (s *menuScreen) rebuild() {
 		}
 	}
 	s.list.SetItems(items)
+	s.panel.Refresh()
 }
 
 // accel handles the single-key shortcuts. Checked before the list gets the
@@ -196,6 +242,23 @@ func (s *menuScreen) accel(k string) tea.Cmd {
 
 func (s *menuScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	switch m := msg.(type) {
+	case tea.WindowSizeMsg:
+		// The panel is off until AutoFit runs during the first resize, so at
+		// Init there's no target to fetch for yet — this is the first moment
+		// there is one.
+		return s, s.fetchTargetInfo()
+
+	case addonsReadyMsg:
+		// The panel's fetch runs at startup, before the addons exist, and
+		// comes back empty. Clearing the key lets it run again now there's
+		// something to ask.
+		s.fetched = ""
+		return s, s.fetchTargetInfo()
+
+	case targetInfoMsg:
+		s.panel.SetTargetInfo(m)
+		return s, nil
+
 	case DownloadTickMsg:
 		cur := s.list.Selected()
 		s.rebuild()
@@ -210,9 +273,23 @@ func (s *menuScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		if cur >= 0 {
 			s.list.Focus(cur)
 		}
-		return s, nil
+		return s, s.fetchTargetInfo()
 
 	case tea.KeyMsg:
+		// Numbers open a panel entry directly, so there's no second cursor to
+		// move around and no focus to switch between halves.
+		if k := m.String(); len(k) == 1 && k[0] >= '1' && k[0] <= '9' && s.panel.On() {
+			if sc, ok := s.panel.At(int(k[0] - '0')); ok {
+				return s, push(sc)
+			}
+			return s, nil
+		}
+		if m.String() == "i" {
+			s.panel.Toggle()
+			s.layout()
+			s.panel.Refresh()
+			return s, s.fetchTargetInfo()
+		}
 		if cmd := s.accel(m.String()); cmd != nil {
 			return s, cmd
 		}
@@ -231,7 +308,12 @@ func (s *menuScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	return s, nil
 }
 
-func (s *menuScreen) View() string { return s.list.View() }
+func (s *menuScreen) View() string {
+	if s.panel.On() && !s.panel.Split(s.w) {
+		return s.list.View() // too narrow to split; the menu wins
+	}
+	return joinContinuePanel(s.list.View(), continuePanelLayout(s.w, &s.panel), &s.panel)
+}
 
 // ── Continue watching ─────────────────────────────────────────────────────────
 

@@ -46,12 +46,117 @@ func parseRelease(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// dateFormats are the layouts offered in settings. 02/01 and 01/02 are
+// indistinguishable for the first twelve days of a month, so which one you're
+// looking at can't be inferred from the output — it has to be a setting.
+var dateFormats = []string{"dmy", "mdy", "ymd", "long"}
+
+// dateFormatName is what settings shows, since "dmy" tells you the field
+// order but not which convention it belongs to.
+func dateFormatName(kind string) string {
+	switch kind {
+	case "mdy":
+		return "US"
+	case "ymd":
+		return "ISO"
+	case "long":
+		return "written"
+	}
+	return "European"
+}
+
+func dateLayout(kind string) string {
+	switch kind {
+	case "mdy":
+		return "Mon 01/02/06"
+	case "ymd":
+		return "Mon 2006-01-02"
+	case "long":
+		return "Mon 2 Jan 2006"
+	}
+	return "Mon 02/01/06"
+}
+
+func nextDateFormat(cur string) string {
+	for i, f := range dateFormats {
+		if f == cur {
+			return dateFormats[(i+1)%len(dateFormats)]
+		}
+	}
+	return "dmy"
+}
+
+// dateSample renders today in a layout, for the settings preview.
+func dateSample(kind string) string { return time.Now().Format(dateLayout(kind)) }
+
 func fmtRelease(s string) string {
 	t, ok := parseRelease(s)
 	if !ok {
 		return ""
 	}
-	return t.Format("Mon 02/01/06")
+
+	kind := "dmy"
+	if ctx != nil {
+		kind = ctx.cfg.DateFormat
+	}
+	return t.Format(dateLayout(kind))
+}
+
+// daysUntil is how many whole days away a release date is, or -1 if it's
+// already passed or unparseable.
+func daysUntil(released string) int {
+	t, ok := parseRelease(released)
+	if !ok {
+		return -1
+	}
+	d := time.Until(t)
+	if d <= 0 {
+		return -1
+	}
+	return int(d.Hours() / 24)
+}
+
+// untilParts splits a day count into two units — a month and a bit reads
+// badly as either "in a month" (loses two weeks) or "in 43 days" (makes you
+// do the arithmetic). Months are approximated at 30 days, which is close
+// enough for an air date and avoids calendar edge cases.
+func untilParts(days int) (n1 int, u1 string, n2 int, u2 string) {
+	switch {
+	case days < 7:
+		return days, "day", 0, ""
+	case days < 31:
+		return days / 7, "week", days % 7, "day"
+	case days < 365:
+		return days / 30, "month", (days % 30) / 7, "week"
+	}
+	return days / 365, "year", (days % 365) / 30, "month"
+}
+
+func plural(n int, unit string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, unit)
+	}
+	return fmt.Sprintf("%d %ss", n, unit)
+}
+
+// untilRelease is the long form, for the info panel.
+func untilRelease(released string) string {
+	days := daysUntil(released)
+	switch {
+	case days < 0:
+		return ""
+	case days < 1:
+		return "today"
+	case days == 1:
+		return "tomorrow"
+	}
+
+	n1, u1, n2, u2 := untilParts(days)
+	out := "in " + plural(n1, u1)
+	if n2 > 0 {
+		out += ", " + plural(n2, u2)
+	}
+	return out
 }
 
 // videoAired reports whether an episode's release date has passed. An
@@ -116,43 +221,7 @@ func sourceTag(source string) string {
 	return grey("[?]")
 }
 
-func metaItem(m Meta) Item {
-	if m.Name == "" {
-		m.Name = m.ID // some debrid catalogs omit names entirely
-	}
-	yr := m.Year
-	if yr == "" {
-		yr = "?"
-	}
-	return Item{
-		Label: bold(m.Name),
-		Sub:   "(" + yr + ")",
-		Badge: sourceTag(m.Source),
-	}
-}
 
-func epItem(v Video, watched bool) Item {
-	badge := ""
-	if r := fmtRelease(v.Released); r != "" {
-		badge = grey(r)
-	}
-
-	it := Item{
-		Label:   bold(hi(fmt.Sprintf("E%02d", v.Episode))),
-		Sub:     v.Title,
-		Badge:   badge,
-		Watched: watched,
-	}
-
-	// Catalogs list episodes well before they air. Without a marker they look
-	// identical to everything else, and you only find out when the stream
-	// search comes back empty.
-	if !videoAired(v) {
-		it.Badge = stWarn.Render("○ airs " + fmtRelease(v.Released))
-		it.Dim = true
-	}
-	return it
-}
 
 // progressGlyph renders a compact "12:34 / 45:00 (27%)" style readout.
 func progressGlyph(pos, dur float64) string {

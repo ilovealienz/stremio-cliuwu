@@ -74,32 +74,34 @@ current screen can do.
 | `b` or `esc` | back |
 | `/` | filter the list |
 | `0-9` | jump straight to a numbered stream |
+| `i` | show info for whatever's highlighted |
 | `tab` | switch provider / category |
 | `X` | stop mpv |
 | `ctrl+q` | quit |
 
-If you're a vim person, `j` `k` `g` `G` and `ctrl+u` `ctrl+d` work too.
+If you're a vim person, `j` `k` and `ctrl+u` `ctrl+d` work too.
 
 From the main menu you can jump straight to things: `m` movies, `s` shows,
-`a` anime, `d` library, `/` search, `f` favourites, `h` history, `A` addons,
-`c` settings, `w` continue watching.
+`a` anime, `d` library, `/` search, `f` favourites, `h` history, `D` downloads,
+`A` addons, `c` settings, `w` continue watching.
 
-On an episode list, `w` marks one watched and `W` does the whole season.
+On an episode list, `w` marks one watched and `W` does the whole season. On a
+catalog, `g` picks a genre. On a stream, `D` downloads it.
 
 Pause and seek aren't bound — do that in the mpv window, it's right there.
 
-## Bits worth knowing
+## From the command line
 
-**Cached streams float to the top.** Torrentio marks instantly-available
-debrid results with `⚡`. Uncached ones need downloading first, so they get
-sorted below. Turn it off in settings if you'd rather not.
+```
+stremio-cliuwu                     the main menu
+stremio-cliuwu chuunibyou          search for it
+stremio-cliuwu -a chuunibyou       search anime only
+stremio-cliuwu -sf -a chuunibyou   ...and open the first result
+stremio-cliuwu -m                  browse movies
+```
 
-**It picks up where you left off.** Continue watching is on the main menu, and
-selecting something you've partly watched asks whether to resume or start over.
-
-**Next episode loads itself.** About three quarters of the way through, it
-fetches the next episode's streams and puts them on screen — so when the
-current one ends you just pick and go.
+`-m` movies, `-t` shows, `-a` anime, `-s` search, `-sf` search and open the
+first result. `--help` for the rest.
 
 ## Heads up
 
@@ -120,22 +122,13 @@ Lives in `~/.config/stremio-cliuwu/` (or `%APPDATA%\stremio-cliuwu\`):
 
 | | |
 |---|---|
-| `config.json` | mpv path, quality preference, toggles |
+| `config.json` | mpv path, quality, downloads, appearance |
 | `addons.json` | your addon URLs |
 | `favourites.json` | |
 | `history.json` | positions and watched state |
 
 Everything in `config.json` is editable from the settings screen, so you
 shouldn't need to touch these by hand.
-
-## 3.0
-
-Rewritten in [Bubble Tea](https://github.com/charmbracelet/bubbletea).
-
-Also dropped the Stremio account login — it used to sign in and pull your addon
-list down, now you just paste the URLs in. Catalogs and search come from your
-installed addons rather than being hardcoded, so adding an addon actually adds
-something to browse.
 
 ## Licence
 

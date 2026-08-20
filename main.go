@@ -113,9 +113,9 @@ func main() {
 	ctx = &appCtx{
 		cfg:        cfg,
 		refs:       refs,
-		addons:     LoadAddons(refs),
 		player:     player,
 		downloader: downloader,
+		loading:    true,
 	}
 
 	model := newApp(newMenuScreen())
@@ -125,6 +125,19 @@ func main() {
 	ctx.prog = prog
 	player.Attach(prog)
 	downloader.Attach(prog)
+
+	// Manifests are fetched after the UI is up, not before it.
+	//
+	// LoadAddons waits for every one of them, and the http client allows
+	// fifteen seconds — so a single unresponsive addon held the whole launch.
+	// This is a background goroutine, which is what Send is for.
+	go prog.Send(addonsReadyMsg{Addons: LoadAddons(refs)})
+
+	// Index only — no folder walk at startup. R on the downloads screen
+	// rescans when the index and the disk have drifted apart.
+	downloader.Load()
+
+	WarmHistory()
 
 	if firstRun {
 		go prog.Send(toastMsg{text: "welcome — add your stream addons under 'addons'"})
@@ -143,6 +156,7 @@ func main() {
 			} else {
 				player.Shutdown()
 			}
+			FlushHistory() // debounced writes mean the last few seconds are still in memory
 		})
 	}
 	defer cleanup()

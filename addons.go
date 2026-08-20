@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Addons are now plain manifest URLs kept in addons.json. No account, no
@@ -17,6 +18,11 @@ import (
 
 const defaultCinemeta = "https://v3-cinemeta.strem.io/manifest.json"
 const defaultKitsu = "https://anime-kitsu.strem.fun/manifest.json"
+
+// The official subtitles addon. Seeded because subtitles are the one thing
+// you'd otherwise have to know to go looking for — a missing stream is
+// obvious immediately, a missing subtitle only becomes obvious mid-episode.
+const defaultOpenSubtitles = "https://opensubtitles-v3.strem.io/manifest.json"
 
 // ── Persistence ───────────────────────────────────────────────────────────────
 
@@ -36,6 +42,7 @@ func SeedAddons() AddonList {
 	al := AddonList{Items: []AddonRef{
 		{URL: defaultCinemeta},
 		{URL: defaultKitsu},
+		{URL: defaultOpenSubtitles},
 	}}
 	SaveAddonRefs(al)
 	return al
@@ -170,9 +177,13 @@ func RedactURL(raw string) string {
 
 // ── Fetching ──────────────────────────────────────────────────────────────────
 
+// manifestTimeout bounds a single manifest fetch. Startup waits on all of
+// them, so the slowest one sets how long the app takes to be usable.
+const manifestTimeout = 5 * time.Second
+
 func FetchAddon(manifestURL string) Addon {
 	a := Addon{TransportURL: manifestURL}
-	if err := getJSON(manifestURL, &a.Manifest); err != nil {
+	if err := getJSONTimeout(manifestURL, &a.Manifest, manifestTimeout); err != nil {
 		a.Err = err
 		return a
 	}
@@ -216,35 +227,3 @@ func OKAddons(in []Addon) []Addon {
 	return out
 }
 
-// AddonItem renders an addon row for the addons screen.
-func AddonItem(ref AddonRef, a *Addon) Item {
-	name := RedactURL(ref.URL)
-	sub := ""
-	badge := ""
-
-	switch {
-	case a == nil:
-		badge = grey("…")
-	case a.Err != nil:
-		badge = bad("failed")
-		sub = a.Err.Error()
-	default:
-		name = a.Manifest.Name
-		var caps []string
-		if a.HasStreams() {
-			caps = append(caps, "streams")
-		}
-		if len(a.Manifest.Catalogs) > 0 {
-			caps = append(caps, fmt.Sprintf("%d catalog(s)", len(a.Manifest.Catalogs)))
-		}
-		sub = strings.Join(caps, " · ")
-		if a.Manifest.Version != "" {
-			badge = grey("v" + a.Manifest.Version)
-		}
-	}
-
-	if ref.Disabled {
-		badge = grey("off")
-	}
-	return Item{Label: bold(name), Sub: sub, Badge: badge, Dim: ref.Disabled}
-}

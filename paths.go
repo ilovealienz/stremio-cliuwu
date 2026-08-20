@@ -30,6 +30,7 @@ func cfgFile() string    { return filepath.Join(configDir(), "config.json") }
 func addonsFile() string { return filepath.Join(configDir(), "addons.json") }
 func favsFile() string   { return filepath.Join(configDir(), "favourites.json") }
 func histFile() string   { return filepath.Join(configDir(), "history.json") }
+func downloadsFile() string { return filepath.Join(configDir(), "downloads.json") }
 
 func ensureDir() { os.MkdirAll(configDir(), 0700) }
 

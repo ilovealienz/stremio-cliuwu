@@ -102,6 +102,7 @@ type DownloadDoneMsg struct {
 type partInfo struct {
 	URL   string `json:"url"`
 	Total int64  `json:"total"`
+	Label string `json:"label,omitempty"`
 }
 
 func partPath(final string) string { return final + ".part" }
@@ -260,6 +261,102 @@ func DownloadPath(root string, t streamTarget, url string) string {
 	return filepath.Join(append([]string{root}, segs...)...)
 }
 
+// ── Index ─────────────────────────────────────────────────────────────────────
+
+// downloads.json records what's been downloaded and what hasn't.
+//
+// The sidecars beside the files are still the authority for resuming — they
+// carry the URL, so a link that's been reissued can't be spliced onto old
+// bytes. This is a cache of that, so startup reads one small file instead of
+// walking a media folder that might be enormous or on a network mount.
+// Rescanning stays available when the two disagree.
+
+// downloadRecord is deliberately thin. Anything derivable from disk isn't
+// stored, because two copies of the same fact can disagree and then something
+// has to win. Path is the reason the index exists; Label is the one thing
+// disk can't supply, since a finished download has no sidecar left.
+type downloadRecord struct {
+	Path  string `json:"path"`
+	Label string `json:"label"`
+	At    int64  `json:"at,omitempty"`
+}
+
+type downloadIndex struct {
+	Version int              `json:"version"`
+	Items   []downloadRecord `json:"items"`
+}
+
+// Load restores the queue from the index, checking each entry against disk.
+func (d *Downloader) Load() {
+	b, err := os.ReadFile(downloadsFile())
+	if err != nil {
+		return
+	}
+	var idx downloadIndex
+	if json.Unmarshal(b, &idx) != nil {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	for _, r := range idx.Items {
+		dl := &Download{Label: r.Label, Path: r.Path}
+
+		// Disk decides the state. An index that says "active" just means the
+		// last run was killed mid-download.
+		if size := fileSize(r.Path); size > 0 {
+			dl.State, dl.Total, dl.Done = DLDone, size, size
+		} else {
+			part := fileSize(partPath(r.Path))
+			if part == 0 {
+				continue // nothing on disk any more
+			}
+
+			// The sidecar is the authority for resuming: without its URL
+			// there's nothing safe to continue from.
+			pi, ok := readPartInfo(r.Path)
+			if !ok || pi.URL == "" {
+				continue
+			}
+			dl.State, dl.Resume = DLCancelled, true
+			dl.URL, dl.Total, dl.Done = pi.URL, pi.Total, part
+			if dl.Label == "" {
+				dl.Label = pi.Label
+			}
+		}
+
+		d.seq++
+		dl.ID = d.seq
+		d.items = append(d.items, dl)
+	}
+}
+
+func fileSize(path string) int64 {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return 0
+	}
+	return fi.Size()
+}
+
+// save writes the index. Takes a snapshot under the lock, writes outside it.
+func (d *Downloader) save() {
+	d.mu.Lock()
+	now := time.Now().Unix()
+	idx := downloadIndex{Version: 1, Items: make([]downloadRecord, 0, len(d.items))}
+	for _, it := range d.items {
+		idx.Items = append(idx.Items, downloadRecord{
+			Path: it.Path, Label: it.Label, At: now,
+		})
+	}
+	d.mu.Unlock()
+
+	if b, err := json.Marshal(idx); err == nil {
+		writeAtomic(downloadsFile(), b)
+	}
+}
+
 // ── Manager ───────────────────────────────────────────────────────────────────
 
 type Downloader struct {
@@ -312,7 +409,98 @@ func (d *Downloader) Add(label, url, path string) (string, bool) {
 	if start {
 		go d.worker()
 	}
+	d.save()
 	return "queued " + label, true
+}
+
+// Scan picks up unfinished downloads left on disk.
+//
+// The queue lives in memory, so without this a restart loses track of what was
+// part-downloaded — the bytes are still there, but you'd have to remember
+// which episode it was and navigate back to it to resume. The sidecar already
+// records the URL and size for resumption; carrying the label too makes the
+// files self-describing, and the disk stays the single source of truth rather
+// than a queue file that can drift from it.
+func (d *Downloader) Scan(root string) int {
+	if root == "" {
+		return 0
+	}
+
+	found := 0
+	filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".part.json") {
+			return nil
+		}
+
+		final := strings.TrimSuffix(path, ".part.json")
+
+		fi, err := os.Stat(partPath(final))
+		if err != nil {
+			os.Remove(path) // sidecar with no data beside it
+			return nil
+		}
+		pi, ok := readPartInfo(final)
+		if !ok || pi.URL == "" {
+			return nil
+		}
+
+		d.mu.Lock()
+		known := false
+		for _, it := range d.items {
+			if it.Path == final {
+				known = true
+				break
+			}
+		}
+		if !known {
+			label := pi.Label
+			if label == "" {
+				label = baseName(final)
+			}
+			d.seq++
+			d.items = append(d.items, &Download{
+				ID: d.seq, Label: label, URL: pi.URL, Path: final,
+				Total: pi.Total, Done: fi.Size(),
+				State: DLCancelled, Resume: true,
+			})
+			found++
+		}
+		d.mu.Unlock()
+		return nil
+	})
+
+	if found > 0 {
+		d.save()
+	}
+	return found
+}
+
+// Resume re-queues a stopped or failed download.
+func (d *Downloader) Resume(id int) bool {
+	d.mu.Lock()
+	var start bool
+	for _, it := range d.items {
+		if it.ID != id {
+			continue
+		}
+		if it.State != DLCancelled && it.State != DLFailed {
+			d.mu.Unlock()
+			return false
+		}
+		it.State, it.Err = DLQueued, nil
+		start = !d.running
+		if start {
+			d.running = true
+		}
+		break
+	}
+	d.mu.Unlock()
+
+	if start {
+		go d.worker()
+	}
+	d.save()
+	return true
 }
 
 func (d *Downloader) Snapshot() []Download {
@@ -355,6 +543,8 @@ func (d *Downloader) Pending() int {
 // Cancel stops an active download or drops a queued one. The partial file is
 // left in place so it can be resumed later.
 func (d *Downloader) Cancel(id int) {
+	defer d.save()
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -374,6 +564,8 @@ func (d *Downloader) Cancel(id int) {
 
 // Clear removes finished entries from the list.
 func (d *Downloader) Clear() {
+	defer d.save()
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
@@ -423,6 +615,7 @@ func (d *Downloader) worker() {
 		label, state := dl.Label, dl.State
 		d.mu.Unlock()
 
+		d.save()
 		if state != DLCancelled {
 			d.emit(DownloadDoneMsg{Label: label, Err: err})
 		}
@@ -484,7 +677,7 @@ func (d *Downloader) fetch(dl *Download) error {
 	d.mu.Lock()
 	dl.Done, dl.Total, dl.Resume = offset, total, offset > 0
 	d.mu.Unlock()
-	writePartInfo(dl.Path, partInfo{URL: dl.URL, Total: total})
+	writePartInfo(dl.Path, partInfo{URL: dl.URL, Total: total, Label: dl.Label})
 
 	flag := os.O_CREATE | os.O_WRONLY
 	if offset > 0 {

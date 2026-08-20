@@ -66,6 +66,7 @@ type PlayerState struct {
 	Buffering bool
 	Paused    bool
 	Label     string // our label, e.g. "Frieren · S01E04"
+	NextLabel string // queued to follow this one, empty if nothing is
 	Title     string // mpv's media-title
 	VideoID   string
 	Pos       float64
@@ -111,7 +112,8 @@ type Player struct {
 
 	wmu sync.Mutex // serialises writes to conn
 
-	replacing  bool    // suppress the end-file/stop that a replace generates
+	queued     *PlayRequest // plays automatically when the current file ends
+	replacing  bool         // suppress the end-file/stop that a replace generates
 	prefetched bool    // next episode already surfaced for this request
 	seekTo     float64 // pending resume seek, applied on file-loaded
 	lastSave  time.Time // throttles history writes
@@ -135,6 +137,53 @@ func (p *Player) State() PlayerState {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.state
+}
+
+// Queue holds a stream to play when the current one ends. Queueing again
+// replaces what was there — you're changing your mind about what's next, not
+// building a list.
+//
+// Neither this nor Unqueue emits: they're called from a screen's Update, and
+// Program.Send writes to an unbuffered channel drained by the very event loop
+// that is running Update — so emitting from there blocks waiting for itself.
+// Callers return playerStateCmd() instead, letting the runtime deliver it.
+func (p *Player) Queue(req PlayRequest) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.queued = &req
+	p.state.NextLabel = req.Label
+}
+
+func (p *Player) Unqueue() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	p.queued = nil
+	p.state.NextLabel = ""
+}
+
+// AddSubtitle loads a subtitle track into the running file and selects it.
+//
+// mpv fetches the URL itself, so nothing is downloaded here — which also
+// means a dead link fails inside mpv rather than anywhere we can report.
+func (p *Player) AddSubtitle(url, title, lang string) tea.Cmd {
+	return func() tea.Msg {
+		if title == "" {
+			title = "subtitle"
+		}
+		if _, err := p.command("sub-add", url, "select", title, lang); err != nil {
+			return toastMsg{text: "mpv wouldn't load that subtitle", isErr: true}
+		}
+		return toastMsg{text: "subtitle on — " + title}
+	}
+}
+
+// Queued returns what's lined up, if anything.
+func (p *Player) Queued() *PlayRequest {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.queued
 }
 
 func (p *Player) Now() *PlayRequest {
@@ -253,6 +302,15 @@ func (p *Player) gone() {
 	}
 	p.emit(PlayerStateMsg{})
 }
+
+// sendAsync runs IPC work off the read loop.
+//
+// dispatch is called synchronously from readLoop, and command() waits for a
+// reply that only readLoop can deliver — so calling it from an event handler
+// deadlocks until the timeout fires. The command still reaches mpv, which is
+// why this looked like it worked; what it actually did was stall every
+// property update for four seconds after each file load.
+func (p *Player) sendAsync(fn func()) { go fn() }
 
 // command sends an mpv IPC command and waits for the matching response.
 func (p *Player) command(args ...any) (map[string]any, error) {
@@ -404,12 +462,18 @@ func (p *Player) onFileLoaded() {
 	st := p.state
 	p.mu.Unlock()
 
-	if seek > 5 {
-		p.command("seek", seek, "absolute")
-	}
-	// Loading a new file while paused leaves mpv paused, so you'd have to go
-	// and hit play yourself. Picking a stream means you want it to play.
-	p.command("set_property", "pause", false)
+	// Off the read loop — see sendAsync. Calling command() here blocked the
+	// reader for the full timeout, twice on a resume, and no property updates
+	// were processed in the meantime.
+	p.sendAsync(func() {
+		if seek > 5 {
+			p.command("seek", seek, "absolute")
+		}
+		// Loading a new file while paused leaves mpv paused, so you'd have to
+		// go and hit play yourself. Picking a stream means you want it to play.
+		p.command("set_property", "pause", false)
+	})
+
 	p.emit(PlayerStateMsg{State: st})
 }
 
@@ -425,6 +489,7 @@ func (p *Player) onEndFile(reason string) {
 	st := p.state
 	autoNext := p.cfg.AutoNext
 	prefetched := p.prefetched
+	queued := p.queued
 	p.mu.Unlock()
 
 	if now == nil {
@@ -435,6 +500,19 @@ func (p *Player) onEndFile(reason string) {
 	case "eof":
 		// Watched in full — pin it at 100% so history is unambiguous.
 		UpdatePosition(now.VideoID, st.Duration, st.Duration)
+
+		// A queued stream beats everything: you've already chosen, so don't
+		// open a picker or announce anything, just play it. Off the read loop,
+		// since play() sends a command and this handler runs inside it.
+		if queued != nil {
+			p.sendAsync(func() {
+				if msg := p.play(*queued); msg != nil {
+					p.emit(msg)
+				}
+			})
+			return
+		}
+
 		if autoNext && now.Queue.HasNext() && !prefetched {
 			p.emit(EpisodeEndedMsg{Prev: *now})
 			return
@@ -444,7 +522,10 @@ func (p *Player) onEndFile(reason string) {
 		}
 		p.emit(PlayerNoticeMsg{Text: "finished — " + now.Label})
 	case "error":
-		p.emit(PlayerErrMsg{Err: errors.New("mpv failed to play that stream")})
+		// Deliberately doesn't skip ahead: a failure here means this stream is
+		// bad, so what you want is a different stream for the same episode,
+		// which is where you already are.
+		p.emit(PlayerErrMsg{Err: errors.New("mpv couldn't play that stream — R to refetch, or pick another")})
 	default:
 		if st.Duration > 0 && st.Pos > 0 {
 			UpdatePosition(now.VideoID, st.Pos, st.Duration)
@@ -473,6 +554,7 @@ func (p *Player) play(req PlayRequest) tea.Msg {
 	prev, prevSt := p.now, p.state
 	p.replacing = true
 	p.prefetched = false
+	p.queued = nil // choosing something now supersedes whatever was lined up
 	p.now = &req
 	p.seekTo = req.Resume
 	p.state = PlayerState{

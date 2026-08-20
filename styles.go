@@ -76,6 +76,7 @@ var (
 	clGreen  = lipgloss.Color("10")
 	clYellow = lipgloss.Color("11")
 	clRed    = lipgloss.Color("9")
+	clDarkRed = lipgloss.Color("124") // stopped, not failed — muted rather than alarming
 	clCyan   = lipgloss.Color("14")
 )
 
@@ -128,6 +129,7 @@ var (
 	stErr   = lipgloss.NewStyle().Foreground(clRed)
 	stOK    = lipgloss.NewStyle().Foreground(clGreen)
 	stWarn  = lipgloss.NewStyle().Foreground(clYellow)
+	stStop  = lipgloss.NewStyle().Foreground(clDarkRed)
 	stToast = lipgloss.NewStyle().Foreground(clCyan)
 	stFaint = lipgloss.NewStyle().Foreground(clGrey).Faint(true)
 
@@ -176,6 +178,18 @@ func keyHint(pairs ...[2]string) string {
 		out = append(out, stKey.Render(p[0])+stHint.Render("="+p[1]))
 	}
 	return stHint.Render("  ") + strings.Join(out, stHint.Render("  "))
+}
+
+// withStatus puts the position counter ahead of the key hints.
+//
+// Trailing it left the count sitting against the global "X=stop mpv" that the
+// root model appends, where "3/48" read as part of that binding rather than as
+// where you are in the list.
+func withStatus(status, hints string) string {
+	if status == "" {
+		return hints
+	}
+	return " " + stHint.Render(status) + "  " + hints
 }
 
 // clamp truncates an ANSI-containing string to w display columns.

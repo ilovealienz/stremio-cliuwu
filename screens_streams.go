@@ -101,11 +101,19 @@ func (s *streamScreen) Footer() string {
 	pairs := [][2]string{
 		{"enter", "play"},
 		{"0-9", "jump"},
-		{"D", "download"},
-		{"/", "filter"},
-		{"r", "reverse"},
-		{"R", "refetch"},
 	}
+	if ctx.player.State().Alive {
+		// Only meaningful while something's playing — otherwise there's
+		// nothing for it to follow.
+		pairs = append(pairs, [2]string{"n", "play next"})
+	}
+	pairs = append(pairs,
+		[2]string{"D", "download"},
+		[2]string{"w", "watched"},
+		[2]string{"/", "filter"},
+		[2]string{"r", "reverse"},
+		[2]string{"R", "refetch"},
+	)
 	if len(s.providers) > 2 {
 		pairs = append(pairs, [2]string{"tab", "provider"})
 	}
@@ -121,7 +129,7 @@ func (s *streamScreen) Footer() string {
 	if n := s.list.NumBuf(); n != "" {
 		out += "   " + stKey.Render("#"+n)
 	}
-	return out + "   " + stHint.Render(s.list.Status())
+	return withStatus(s.list.Status(), out)
 }
 
 // providerFilter is the addon name currently selected, "" meaning all.
@@ -218,15 +226,18 @@ func (s *streamScreen) hop(delta int) tea.Cmd {
 }
 
 // launch starts playback at an explicit position.
-func (s *streamScreen) launch(st Stream, resume float64) tea.Cmd {
+// request builds the play request for a stream. Shared by launch and queue so
+// the two can't drift — a queued episode has to record exactly the same
+// history and episode context as one played directly.
+func (s *streamScreen) request(st Stream, resume float64) PlayRequest {
 	t := s.target
 
 	entry := HistoryEntry{
-		Name:   t.Meta.Name,
-		ID:     t.Meta.ID,
-		Type:   t.Meta.Type,
-		Source: t.Meta.Source,
-		Year:   t.Meta.Year,
+		Name:    t.Meta.Name,
+		ID:      t.Meta.ID,
+		Type:    t.Meta.Type,
+		Source:  t.Meta.Source,
+		Year:    t.Meta.Year,
 		VideoID: t.VideoID,
 	}
 	if t.Queue != nil {
@@ -242,7 +253,7 @@ func (s *streamScreen) launch(st Stream, resume float64) tea.Cmd {
 		}
 	}
 
-	return ctx.player.Play(PlayRequest{
+	return PlayRequest{
 		VideoID:   t.VideoID,
 		MediaType: t.MediaType,
 		Label:     t.Label,
@@ -251,7 +262,32 @@ func (s *streamScreen) launch(st Stream, resume float64) tea.Cmd {
 		Entry:     entry,
 		Queue:     t.Queue,
 		Addons:    ctx.StreamAddons(),
-	})
+	}
+}
+
+// launch starts playback at an explicit position.
+func (s *streamScreen) launch(st Stream, resume float64) tea.Cmd {
+	return ctx.player.Play(s.request(st, resume))
+}
+
+// queue lines a stream up to follow whatever is playing. Pressing n again on
+// the same stream takes it back off.
+func (s *streamScreen) queue(st Stream) tea.Cmd {
+	if !ctx.player.State().Alive {
+		return toastErr("nothing is playing to queue behind")
+	}
+	if st.URL == "" {
+		return toastErr("that stream has no url")
+	}
+
+	req := s.request(st, 0)
+	if q := ctx.player.Queued(); q != nil && q.VideoID == req.VideoID && q.URL == req.URL {
+		ctx.player.Unqueue()
+		return tea.Batch(toast("removed from up next"), playerStateCmd())
+	}
+
+	ctx.player.Queue(req)
+	return tea.Batch(toast("up next — "+req.Label), playerStateCmd())
 }
 
 // play asks before seeking. Silently jumping into the middle of something is
@@ -290,6 +326,25 @@ func (s *streamScreen) download(st Stream) tea.Cmd {
 		return toastErr(msg)
 	}
 	return toast(msg)
+}
+
+// toggleWatched flips the watched flag for whatever this screen is showing.
+func (s *streamScreen) toggleWatched() tea.Cmd {
+	t := s.target
+
+	e := HistoryEntry{
+		Name: t.Meta.Name, ID: t.Meta.ID, Type: t.Meta.Type,
+		Source: t.Meta.Source, Year: t.Meta.Year, VideoID: t.VideoID,
+	}
+	if t.Queue != nil {
+		v := t.Queue.Episodes[t.Queue.Index]
+		e.Season, e.Episode, e.EpTitle = t.Queue.Season, v.Episode, v.Title
+	}
+
+	if ToggleWatchedByEpisode(e) {
+		return toast("marked " + t.Label + " watched")
+	}
+	return toast("marked " + t.Label + " unwatched")
 }
 
 // nextEpisodeTarget advances a finished request's queue by one, continuing
@@ -366,6 +421,14 @@ func (s *streamScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				s.provIdx = (s.provIdx - 1 + len(s.providers)) % len(s.providers)
 				s.rebuild()
 			}
+		case "n":
+			if i := s.list.Selected(); i >= 0 && i < len(s.shown) {
+				return s, s.queue(s.streams[s.shown[i]])
+			}
+		case "w":
+			// Films had no way back from a wrong watched mark: w exists on
+			// episode lists, and a film never appears in one.
+			return s, s.toggleWatched()
 		case "D":
 			// Shifted deliberately: it writes to disk, and it sits right
 			// beside the keys you're mashing to pick a stream.

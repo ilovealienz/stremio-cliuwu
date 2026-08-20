@@ -20,6 +20,8 @@ type appCtx struct {
 	player     *Player
 	downloader *Downloader
 	prog       *tea.Program
+
+	loading bool // manifests still being fetched
 }
 
 var ctx *appCtx
@@ -82,6 +84,9 @@ type reloadAddonsMsg struct{}
 // in the row painter, which is what made the inconsistency visible.
 type themeChangedMsg struct{}
 
+// addonsReadyMsg carries the manifests once the background fetch is done.
+type addonsReadyMsg struct{ Addons []Addon }
+
 func themeChanged() tea.Cmd { return func() tea.Msg { return themeChangedMsg{} } }
 
 // rebuildable is any screen that can regenerate its rows on demand.
@@ -96,6 +101,15 @@ func popN(n int) tea.Cmd       { return func() tea.Msg { return popMsg{n} } }
 func popRoot() tea.Cmd         { return func() tea.Msg { return popRootMsg{} } }
 func replaceTop(s screen) tea.Cmd { return func() tea.Msg { return replaceMsg{s} } }
 func toast(s string) tea.Cmd   { return func() tea.Msg { return toastMsg{text: s} } }
+
+// playerStateCmd refreshes the player bar from a screen.
+//
+// Player methods called from the UI must not emit directly — Send blocks when
+// invoked from inside Update. Returning a command hands the message to the
+// runtime, which delivers it once the current update has finished.
+func playerStateCmd() tea.Cmd {
+	return func() tea.Msg { return PlayerStateMsg{State: ctx.player.State()} }
+}
 func toastErr(s string) tea.Cmd { return func() tea.Msg { return toastMsg{text: s, isErr: true} } }
 
 // ── Root model ────────────────────────────────────────────────────────────────
@@ -164,9 +178,17 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, toast("downloaded " + m.Label)
 
 	case PrefetchNextMsg:
+		// Something's already lined up — don't pull the rug out from under a
+		// decision that's been made.
+		if ctx.player.Queued() != nil {
+			return a, nil
+		}
 		return a, a.advanceTo(m.Prev, "next up — ")
 
 	case EpisodeEndedMsg:
+		if ctx.player.Queued() != nil {
+			return a, nil
+		}
 		return a, a.advanceTo(m.Prev, "next up — ")
 
 	case PlayerErrMsg:
@@ -212,6 +234,20 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.stack[len(a.stack)-1] = m.s
 		return a, m.s.Init()
 
+	case addonsReadyMsg:
+		ctx.addons = m.Addons
+		ctx.loading = false
+		for _, sc := range a.stack {
+			if r, ok := sc.(rebuildable); ok {
+				r.rebuild()
+			}
+		}
+		// Delegated as well as broadcast: anything that tried to fetch before
+		// the addons existed got nothing back, and needs telling to try again.
+		next, cmd := a.top().Update(msg)
+		a.stack[len(a.stack)-1] = next
+		return a, cmd
+
 	case themeChangedMsg:
 		for _, sc := range a.stack {
 			if r, ok := sc.(rebuildable); ok {
@@ -223,6 +259,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reloadAddonsMsg:
 		ctx.refs = LoadAddonRefs()
 		ctx.addons = LoadAddons(ctx.refs)
+		// Cached results carry the ranks they were fetched with, so without
+		// this a reorder wouldn't take effect until the five minute TTL ran
+		// out — which reads as the reorder having done nothing.
+		cacheStreams.Clear()
 		return a, nil
 
 	case tea.KeyMsg:
@@ -263,6 +303,16 @@ func (a *app) globalKey(k tea.KeyMsg) (tea.Cmd, bool) {
 	case "X":
 		if a.pstate.Alive {
 			return ctx.player.Stop(), true
+		}
+	case "S":
+		// Global on purpose: you realise you want subtitles a minute into an
+		// episode, by which point the stream list is several screens back.
+		if now := ctx.player.Now(); now != nil {
+			return push(newSubsScreen(streamTarget{
+				MediaType: now.MediaType,
+				VideoID:   now.VideoID,
+				Label:     now.Label,
+			})), true
 		}
 	}
 	return nil, false
@@ -455,7 +505,7 @@ func (a *app) View() string {
 
 	hints := a.top().Footer()
 	if a.pstate.Alive {
-		hints += keyHint([2]string{"X", "stop mpv"})
+		hints += keyHint([2]string{"S", "subtitles"}, [2]string{"X", "stop mpv"})
 	}
 	b.WriteString(clamp(hints, a.w))
 
@@ -522,6 +572,9 @@ func (a *app) playerBar() string {
 	right := progressGlyph(s.Pos, s.Duration)
 	if s.QueueLen > 1 {
 		right = stHint.Render(itoa(s.QueuePos)+"/"+itoa(s.QueueLen)) + "  " + right
+	}
+	if s.NextLabel != "" {
+		right += "   " + stKey.Render("next: ") + stSub.Render(s.NextLabel)
 	}
 
 	left := " " + glyph + " " + stSelected.Render(label)

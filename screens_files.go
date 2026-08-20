@@ -182,7 +182,7 @@ func (s *fileListScreen) Footer() string {
 		pairs = append(pairs, [2]string{"F", "flat/folders"})
 	}
 	pairs = append(pairs, [2]string{"/", "filter"}, [2]string{"b/esc", "back"})
-	return keyHint(pairs...) + "   " + stHint.Render(s.list.Status())
+	return withStatus(s.list.Status(), keyHint(pairs...))
 }
 
 // fileRow is one visible line: either a subdirectory or a playable file.

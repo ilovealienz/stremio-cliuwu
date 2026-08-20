@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -29,7 +31,14 @@ var httpClient = &http.Client{
 	},
 }
 
-func getJSON(u string, out any) error {
+func getJSON(u string, out any) error { return getJSONTimeout(u, out, 0) }
+
+// getJSONTimeout is getJSON with a deadline of its own.
+//
+// A manifest is a few hundred bytes and either answers quickly or isn't
+// coming. Letting it use the full fifteen second client timeout meant one
+// unresponsive addon delayed everything waiting on the set.
+func getJSONTimeout(u string, out any, timeout time.Duration) error {
 	req, err := http.NewRequest("GET", u, nil)
 	if err != nil {
 		return err
@@ -37,6 +46,13 @@ func getJSON(u string, out any) error {
 	req.Header.Set("User-Agent", "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", "en-GB,en;q=0.9")
+
+	if timeout > 0 {
+		c, cancel := context.WithTimeout(req.Context(), timeout)
+		defer cancel()
+		req = req.WithContext(c)
+	}
+
 	r, err := httpClient.Do(req)
 	if err != nil {
 		return err
@@ -45,7 +61,17 @@ func getJSON(u string, out any) error {
 	if r.StatusCode >= 400 {
 		return fmt.Errorf("http %d", r.StatusCode)
 	}
-	return json.NewDecoder(r.Body).Decode(out)
+
+	// A dead or moved addon usually answers with a web page rather than a
+	// 404, and the decoder then reports `invalid character '<'`, which tells
+	// you nothing about what went wrong. Peeking at the first byte costs
+	// nothing and turns it into something actionable.
+	body := bufio.NewReader(r.Body)
+	if b, err := body.Peek(1); err == nil && (b[0] == '<') {
+		return fmt.Errorf("got a web page, not json — wrong url, or the addon has moved")
+	}
+
+	return json.NewDecoder(body).Decode(out)
 }
 
 // ── Streams ───────────────────────────────────────────────────────────────────
@@ -95,6 +121,7 @@ func GetStreams(addons []Addon, mediaType, videoID string) []Stream {
 			}
 			for j := range resp.Streams {
 				resp.Streams[j].Addon = a.Manifest.Name
+				resp.Streams[j].Rank = i // position in the configured order
 			}
 			results[i] = resp.Streams
 		}(i, a)

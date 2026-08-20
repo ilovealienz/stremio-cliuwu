@@ -89,13 +89,13 @@ func (s *seasonScreen) SetSize(w, h int) {
 }
 
 func (s *seasonScreen) Footer() string {
-	return keyHint(
+	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "episodes"},
 		[2]string{"i", "info"},
 		[2]string{"f", "favourite show"},
 		[2]string{"w", "mark season"},
 		[2]string{"b/esc", "back"},
-	) + "   " + stHint.Render(s.list.Status())
+	))
 }
 
 func (s *seasonScreen) rebuild() {
@@ -314,7 +314,7 @@ func (s *episodeScreen) SetSize(w, h int) {
 }
 
 func (s *episodeScreen) Footer() string {
-	return keyHint(
+	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "streams"},
 		[2]string{"i", "info"},
 		[2]string{"f", "favourite season"},
@@ -322,7 +322,7 @@ func (s *episodeScreen) Footer() string {
 		[2]string{"W", "whole season"},
 		[2]string{"/", "filter"},
 		[2]string{"b/esc", "back"},
-	) + "   " + stHint.Render(s.list.Status())
+	))
 }
 
 func (s *episodeScreen) rebuild() {
@@ -440,12 +440,27 @@ func (s *episodeScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "w":
 			if i := s.list.Selected(); i >= 0 {
 				v := s.eps[i]
-				now := ToggleWatchedByEpisode(HistoryEntry{
+
+				e := HistoryEntry{
 					Name: s.show.Name, ID: s.show.ID, Type: "series",
 					Source: s.show.Source, Year: s.show.Year,
 					Season: s.season, Episode: v.Episode,
 					VideoID: v.ID, EpTitle: v.Title,
-				})
+					EpisodeTotal: len(s.eps),
+				}
+
+				// Record what follows, same as playing it would. The full
+				// video list is right here, so next-up works from a marked
+				// episode rather than only from a played one.
+				q := EpQueue{Show: s.show, Season: s.season, Episodes: s.eps, Index: i, All: s.sm.Videos}
+				if n, season, ok := q.Next(); ok {
+					e.NextVideoID = n.ID
+					e.NextSeason = season
+					e.NextEpisode = n.Episode
+					e.NextTitle = n.Title
+				}
+
+				now := ToggleWatchedByEpisode(e)
 				s.rebuild()
 				s.list.Focus(i)
 				if now {

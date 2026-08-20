@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"time"
 )
@@ -47,41 +46,3 @@ func RemoveFav(idx int) {
 }
 
 // FavItem builds a list Item for a favourite, including watch progress badge.
-func FavItem(f Favourite) Item {
-	yr := f.Year
-	if yr == "" {
-		yr = "?"
-	}
-	season := ""
-	if f.Season > 0 {
-		season = fmt.Sprintf("  S%02d", f.Season)
-	}
-	label := fmt.Sprintf("%s  %s", bold(f.Name), grey("("+yr+")"))
-
-	// Get watch progress from history
-	badge := sourceTag(f.Source) + season
-	if f.Type == "series" {
-		h := LoadHistory()
-		var lastEntry *HistoryEntry
-		for i := range h.Items {
-			e := &h.Items[i]
-			if e.ID == f.ID {
-				if f.Season == 0 || e.Season == f.Season {
-					lastEntry = e
-					break
-				}
-			}
-		}
-		if lastEntry != nil {
-			if lastEntry.Watched {
-				badge += "  " + good("✓")
-			} else if lastEntry.Position > 0 && lastEntry.Duration > 0 {
-				badge += "  " + yell("▶ "+fmtSecs(lastEntry.Position))
-			} else if lastEntry.Season > 0 && lastEntry.Episode > 0 {
-				badge += "  " + grey(fmt.Sprintf("S%02dE%02d", lastEntry.Season, lastEntry.Episode))
-			}
-		}
-	}
-
-	return Item{Label: label, Badge: badge}
-}

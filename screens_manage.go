@@ -1,11 +1,11 @@
 package main
 
 import (
-	"fmt"
 	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ── Favourites ────────────────────────────────────────────────────────────────
@@ -34,12 +34,12 @@ func (s *favsScreen) SetSize(w, h int) {
 }
 
 func (s *favsScreen) Footer() string {
-	return keyHint(
+	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "open"},
 		[2]string{"d", "remove"},
 		[2]string{"/", "filter"},
 		[2]string{"b/esc", "back"},
-	) + "   " + stHint.Render(s.list.Status())
+	))
 }
 
 func (s *favsScreen) rebuild() {
@@ -107,12 +107,12 @@ func (s *historyScreen) SetSize(w, h int) {
 }
 
 func (s *historyScreen) Footer() string {
-	return keyHint(
+	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "resume"},
 		[2]string{"d", "remove"},
 		[2]string{"D", "clear all"},
 		[2]string{"b/esc", "back"},
-	) + "   " + stHint.Render(s.list.Status())
+	))
 }
 
 func (s *historyScreen) rebuild() {
@@ -339,9 +339,22 @@ func (s *addonsScreen) View() string {
 
 // ── Settings ──────────────────────────────────────────────────────────────────
 
+// settingRow is one line of the settings screen. Actions hang off the row
+// itself rather than a switch on the row index — that switch had to be
+// renumbered every time a setting was added, and getting it wrong wires a
+// label to the wrong action silently.
+type settingRow struct {
+	head  string // section label; no action, not selectable
+	label string
+	sub   string
+	badge string
+	act   func() tea.Cmd
+}
+
 type settingsScreen struct {
 	baseScreen
 	list listModel
+	rows []settingRow
 }
 
 func newSettingsScreen() *settingsScreen {
@@ -377,38 +390,149 @@ func orDash(s string) string {
 	return s
 }
 
-func (s *settingsScreen) rebuild() {
-	c := ctx.cfg
-	s.list.SetItems([]Item{
-		{Label: bold("mpv path"), Badge: orDash(c.MpvPath)},
-		{Label: bold("preferred quality"), Sub: "streams matching this sort first", Badge: orDash(c.PreferredQuality)},
-		{Label: bold("subtitle language"), Sub: "mpv --slang", Badge: orDash(c.SubtitleLang)},
-		{Label: bold("history size"), Badge: strconv.Itoa(c.HistoryMax)},
-		{Label: bold("omdb key"), Sub: "episode titles for imdb shows", Badge: orDash(c.OmdbKey)},
-		{Label: bold("open next episode"), Sub: "show its streams when one finishes", Badge: onOff(c.AutoNext)},
-		{Label: bold("ask to resume"), Sub: "off always starts from the beginning", Badge: onOff(c.AutoResume)},
-		{Label: bold("close mpv on exit"), Sub: "off leaves playback running after you quit", Badge: onOff(c.CloseMpvOnExit)},
-		{Label: bold("cached streams first"), Sub: "float instantly-available debrid results", Badge: onOff(c.CachedFirst)},
-		{Label: bold("accent colour"), Sub: "used for highlights, rules and the cursor",
-			Badge: accentSwatch(c.Accent) + "  " + orDash(c.Accent)},
-		{Label: bold("auto-open info panel"), Sub: "on wide terminals · i toggles it anyway",
-			Badge: onOff(c.AutoInfo)},
-		{Label: bold("posters"), Sub: "block art in the info panel · looks rough, be warned", Badge: onOff(c.Posters)},
-		{Label: bold("poster size"), Sub: "bigger is sharper but eats the panel", Badge: orDash(c.PosterSize)},
-		{Label: bold("download location"), Sub: "where D on a stream saves to", Badge: orDash(c.DownloadDir)},
-		{Label: bold("organise downloads"), Sub: "off saves everything flat", Badge: onOff(c.DownloadFolders)},
-		{Label: bold("movie filename"), Sub: orDash(c.MoviePattern)},
-		{Label: bold("episode filename"), Sub: orDash(c.EpisodePattern)},
-	})
-}
-
 func (s *settingsScreen) save() tea.Cmd {
 	ctx.cfg.SetDefaults()
 	SaveConfig(ctx.cfg)
-	invalidateInProgress()
 	ctx.player.SetConfig(ctx.cfg)
+	invalidateInProgress()
 	s.rebuild()
 	return toast("saved")
+}
+
+// prompt is the common shape: edit a value, save, rebuild.
+func (s *settingsScreen) prompt(title, placeholder, current string, set func(string) tea.Cmd, help ...string) tea.Cmd {
+	return push(newPrompt(title, placeholder, current, set, help...))
+}
+
+func (s *settingsScreen) rebuild() {
+	c := ctx.cfg
+
+	s.rows = []settingRow{
+		{head: "playback"},
+		{label: "mpv path", badge: orDash(c.MpvPath), act: func() tea.Cmd {
+			return s.prompt("mpv path", "mpv", ctx.cfg.MpvPath, func(v string) tea.Cmd {
+				ctx.cfg.MpvPath = v
+				return s.save()
+			}, "leave blank to use `mpv` from PATH", "detected: "+orDash(detectMpv()))
+		}},
+		{label: "preferred quality", sub: "streams matching this sort first", badge: orDash(c.PreferredQuality), act: func() tea.Cmd {
+			return s.prompt("preferred quality", "1080p", ctx.cfg.PreferredQuality, func(v string) tea.Cmd {
+				ctx.cfg.PreferredQuality = v
+				return s.save()
+			}, "substring match on the stream name, e.g. 2160p / 1080p / HDR")
+		}},
+		{label: "cached streams first", sub: "float instantly-available debrid results", badge: onOff(c.CachedFirst), act: func() tea.Cmd {
+			ctx.cfg.CachedFirst = !ctx.cfg.CachedFirst
+			return s.save()
+		}},
+		{label: "subtitle language", sub: "preferred track, and where S opens",
+			badge: orDash(c.SubtitleLang), act: func() tea.Cmd {
+				return s.prompt("subtitle language", "eng", ctx.cfg.SubtitleLang, func(v string) tea.Cmd {
+					ctx.cfg.SubtitleLang = v
+					return s.save()
+				},
+					"code or name — eng, en and English all work",
+					"passed to mpv as --slang, and preselected in the S picker")
+			}},
+		{label: "ask to resume", sub: "off always starts from the beginning", badge: onOff(c.AutoResume), act: func() tea.Cmd {
+			ctx.cfg.AutoResume = !ctx.cfg.AutoResume
+			return s.save()
+		}},
+		{label: "open next episode", sub: "show its streams when one finishes", badge: onOff(c.AutoNext), act: func() tea.Cmd {
+			ctx.cfg.AutoNext = !ctx.cfg.AutoNext
+			return s.save()
+		}},
+		{label: "close mpv on exit", sub: "off leaves playback running after you quit", badge: onOff(c.CloseMpvOnExit), act: func() tea.Cmd {
+			ctx.cfg.CloseMpvOnExit = !ctx.cfg.CloseMpvOnExit
+			return s.save()
+		}},
+
+		{head: ""},
+		{head: "library"},
+		{label: "history size", sub: "rows on the history screen · watched state is kept forever",
+			badge: strconv.Itoa(c.HistoryMax), act: func() tea.Cmd {
+			return s.prompt("history size", "300", strconv.Itoa(ctx.cfg.HistoryMax), func(v string) tea.Cmd {
+				n, err := strconv.Atoi(v)
+				if err != nil || n <= 0 {
+					return toastErr("needs to be a positive number")
+				}
+				ctx.cfg.HistoryMax = n
+				return s.save()
+			})
+		}},
+		{label: "omdb key", sub: "episode titles for imdb shows", badge: orDash(c.OmdbKey), act: func() tea.Cmd {
+			return s.prompt("omdb key", "trilogy", ctx.cfg.OmdbKey, func(v string) tea.Cmd {
+				ctx.cfg.OmdbKey = v
+				return s.save()
+			})
+		}},
+		{label: "date format", sub: "air dates and release dates",
+			badge: stSub.Render(dateSample(c.DateFormat)) + grey("  "+dateFormatName(c.DateFormat)), act: func() tea.Cmd {
+			ctx.cfg.DateFormat = nextDateFormat(ctx.cfg.DateFormat)
+			return tea.Batch(s.save(), themeChanged())
+		}},
+
+		{head: ""},
+		{head: "appearance"},
+		{label: "accent colour", sub: "highlights, rules and the cursor",
+			badge: accentSwatch(c.Accent) + "  " + orDash(c.Accent), act: func() tea.Cmd {
+				return s.prompt("accent colour", "pink", ctx.cfg.Accent, func(v string) tea.Cmd {
+					ctx.cfg.Accent = v
+					applyAccent(v)
+					return tea.Batch(s.save(), themeChanged())
+				}, "presets: "+strings.Join(accentOrder, " "),
+					"or a hex value like #ff8800, or a terminal colour 0-255")
+			}},
+		{label: "auto-open info panel", sub: "on wide terminals · i toggles it anyway", badge: onOff(c.AutoInfo), act: func() tea.Cmd {
+			ctx.cfg.AutoInfo = !ctx.cfg.AutoInfo
+			return s.save()
+		}},
+		{label: "posters", sub: "block art in the info panel · looks rough, be warned", badge: onOff(c.Posters), act: func() tea.Cmd {
+			ctx.cfg.Posters = !ctx.cfg.Posters
+			return s.save()
+		}},
+		{label: "poster size", sub: "bigger is sharper but eats the panel", badge: orDash(c.PosterSize), act: func() tea.Cmd {
+			ctx.cfg.PosterSize = nextPosterSize(ctx.cfg.PosterSize)
+			posterGen++ // force panels to redraw at the new size
+			return s.save()
+		}},
+
+		{head: ""},
+		{head: "downloads"},
+		{label: "download location", sub: "where D on a stream saves to", badge: orDash(c.DownloadDir), act: func() tea.Cmd {
+			return s.prompt("download location", defaultDownloadDir(), ctx.cfg.DownloadDir, func(v string) tea.Cmd {
+				ctx.cfg.DownloadDir = expandPath(v)
+				return s.save()
+			}, "~ and environment variables are expanded", "folders are created as needed")
+		}},
+		{label: "organise downloads", sub: "off saves everything flat", badge: onOff(c.DownloadFolders), act: func() tea.Cmd {
+			ctx.cfg.DownloadFolders = !ctx.cfg.DownloadFolders
+			return s.save()
+		}},
+		{label: "movie filename", sub: orDash(c.MoviePattern), act: func() tea.Cmd {
+			return s.prompt("movie filename", DefaultMoviePattern, ctx.cfg.MoviePattern, func(v string) tea.Cmd {
+				ctx.cfg.MoviePattern = v
+				return s.save()
+			}, "placeholders: {title} {year}", "/ makes a folder · extension is added for you")
+		}},
+		{label: "episode filename", sub: orDash(c.EpisodePattern), act: func() tea.Cmd {
+			return s.prompt("episode filename", DefaultEpisodePattern, ctx.cfg.EpisodePattern, func(v string) tea.Cmd {
+				ctx.cfg.EpisodePattern = v
+				return s.save()
+			}, "placeholders: {show} {season} {episode} {title} {year}",
+				"/ makes a folder · extension is added for you")
+		}},
+	}
+
+	items := make([]Item, len(s.rows))
+	for i, r := range s.rows {
+		if r.act == nil {
+			items[i] = Item{Header: true, Label: r.head}
+			continue
+		}
+		items[i] = Item{Label: bold(r.label), Sub: r.sub, Badge: r.badge}
+	}
+	s.list.SetItems(items)
 }
 
 func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
@@ -418,97 +542,8 @@ func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		}
 		switch k.String() {
 		case "enter":
-			switch s.list.Selected() {
-			case 0:
-				return s, push(newPrompt("mpv path", "mpv", ctx.cfg.MpvPath, func(v string) tea.Cmd {
-					ctx.cfg.MpvPath = v
-					return s.save()
-				}, "leave blank to just use `mpv` from PATH", "detected: "+orDash(detectMpv())))
-			case 1:
-				return s, push(newPrompt("preferred quality", "1080p", ctx.cfg.PreferredQuality, func(v string) tea.Cmd {
-					ctx.cfg.PreferredQuality = v
-					return s.save()
-				}, "substring match against the stream name, e.g. 2160p / 1080p / HDR"))
-			case 2:
-				return s, push(newPrompt("subtitle language", "eng", ctx.cfg.SubtitleLang, func(v string) tea.Cmd {
-					ctx.cfg.SubtitleLang = v
-					return s.save()
-				}, "applied on mpv launch — restart mpv for it to take effect"))
-			case 3:
-				return s, push(newPrompt("history size", "100", strconv.Itoa(ctx.cfg.HistoryMax), func(v string) tea.Cmd {
-					n, err := strconv.Atoi(v)
-					if err != nil || n <= 0 {
-						return toastErr("needs to be a positive number")
-					}
-					ctx.cfg.HistoryMax = n
-					return s.save()
-				}))
-			case 4:
-				return s, push(newPrompt("omdb key", "trilogy", ctx.cfg.OmdbKey, func(v string) tea.Cmd {
-					ctx.cfg.OmdbKey = v
-					return s.save()
-				}))
-			case 5:
-				ctx.cfg.AutoNext = !ctx.cfg.AutoNext
-				return s, s.save()
-			case 6:
-				ctx.cfg.AutoResume = !ctx.cfg.AutoResume
-				return s, s.save()
-			case 7:
-				ctx.cfg.CloseMpvOnExit = !ctx.cfg.CloseMpvOnExit
-				return s, s.save()
-			case 8:
-				ctx.cfg.CachedFirst = !ctx.cfg.CachedFirst
-				return s, s.save()
-			case 10:
-				ctx.cfg.AutoInfo = !ctx.cfg.AutoInfo
-				return s, s.save()
-			case 11:
-				ctx.cfg.Posters = !ctx.cfg.Posters
-				return s, s.save()
-			case 12:
-				ctx.cfg.PosterSize = nextPosterSize(ctx.cfg.PosterSize)
-				posterGen++ // force panels to redraw at the new size
-				return s, s.save()
-			case 13:
-				return s, push(newPrompt("download location", defaultDownloadDir(), ctx.cfg.DownloadDir,
-					func(v string) tea.Cmd {
-						ctx.cfg.DownloadDir = expandPath(v)
-						return s.save()
-					}, "~ and environment variables are expanded",
-					"folders are created as needed"))
-			case 14:
-				ctx.cfg.DownloadFolders = !ctx.cfg.DownloadFolders
-				return s, s.save()
-			case 15:
-				return s, push(newPrompt("movie filename", DefaultMoviePattern, ctx.cfg.MoviePattern,
-					func(v string) tea.Cmd {
-						ctx.cfg.MoviePattern = v
-						return s.save()
-					},
-					"placeholders: {title} {year}",
-					"/ makes a folder · extension is added for you",
-				))
-			case 16:
-				return s, push(newPrompt("episode filename", DefaultEpisodePattern, ctx.cfg.EpisodePattern,
-					func(v string) tea.Cmd {
-						ctx.cfg.EpisodePattern = v
-						return s.save()
-					},
-					"placeholders: {show} {season} {episode} {title} {year}",
-					"/ makes a folder · extension is added for you",
-				))
-			case 9:
-				return s, push(newPrompt("accent colour", "pink", ctx.cfg.Accent, func(v string) tea.Cmd {
-					ctx.cfg.Accent = v
-					applyAccent(v)
-					// Restyling isn't enough on its own — already-rendered
-					// rows hold the old escape codes.
-					return tea.Batch(s.save(), themeChanged())
-				},
-					"presets: "+strings.Join(accentOrder, " "),
-					"or a hex value like #ff8800, or a terminal colour 0-255",
-				))
+			if i := s.list.Selected(); i >= 0 && i < len(s.rows) && s.rows[i].act != nil {
+				return s, s.rows[i].act()
 			}
 		case "esc", "backspace":
 			return s, pop()
@@ -520,6 +555,14 @@ func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 }
 
 func (s *settingsScreen) View() string {
-	head := "  " + stSub.Render(fmt.Sprintf("config: %s", cfgFile())) + "\n"
-	return head + s.list.View()
+	// Version alongside the config path: the two things you'd want to quote
+	// when something's wrong, and the one place you'd think to look for them.
+	left := "  " + stSub.Render(cfgFile())
+	right := stHint.Render(appName+" ") + stKey.Render(version)
+
+	head := left
+	if gap := s.w - lipgloss.Width(left) - lipgloss.Width(right) - 2; gap > 1 {
+		head += strings.Repeat(" ", gap) + right
+	}
+	return head + "\n" + s.list.View()
 }

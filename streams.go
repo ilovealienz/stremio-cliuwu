@@ -143,6 +143,13 @@ func streamCached(s Stream) int {
 // SortStreams orders the stream list. Cached-first matters more than
 // resolution in practice: picking an uncached debrid result means waiting for
 // the provider to fetch the torrent before mpv gets anything at all.
+// SortStreams orders by addon priority, then cached, then quality.
+//
+// Addon order has to come first. With cached-first as the primary key, an
+// addon serving direct debrid files — no ⚡ or [RD+] in the title, so it
+// scores as unknown — sank below one whose results are detectably cached,
+// however high you'd placed it. Reordering the list then looked like it did
+// nothing at all for that addon.
 func SortStreams(streams []Stream, preferred string, cachedFirst bool) []Stream {
 	pref := strings.ToUpper(preferred)
 
@@ -159,12 +166,17 @@ func SortStreams(streams []Stream, preferred string, cachedFirst bool) []Stream 
 	}
 
 	sort.SliceStable(streams, func(i, j int) bool {
-		ci, qi := score(streams[i])
-		cj, qj := score(streams[j])
-		if ci != cj {
-			return ci > cj
+		a, b := streams[i], streams[j]
+		if a.Rank != b.Rank {
+			return a.Rank < b.Rank
 		}
-		return qi > qj
+
+		ca, qa := score(a)
+		cb, qb := score(b)
+		if ca != cb {
+			return ca > cb
+		}
+		return qa > qb
 	})
 	return streams
 }

@@ -37,7 +37,7 @@ import (
 // a 22-cell poster is a 22-pixel image, which no amount of careful scaling
 // rescues. More cells is the only real quality dial, which is why the size is
 // a setting rather than a fixed constant.
-var posterSizes = []string{"small", "medium", "large", "xl"}
+var posterSizes = []string{"small", "medium", "large", "xl", "xxl"}
 
 // posterBudget returns the cell limits for a size, given the panel dimensions.
 // Height is usually the binding constraint in the side panel; the width cap
@@ -50,6 +50,12 @@ func posterBudget(size string, paneW, paneH int) (int, int) {
 		return min(paneW, 56), max(8, paneH/2)
 	case "xl":
 		return min(paneW, 72), max(10, paneH*2/3)
+	case "xxl":
+		// Fills the panel width. Every other size caps height first, which
+		// leaves the width short whenever the panel is taller than it is
+		// wide — this lets width bind instead and accepts a poster taller
+		// than the visible area, since the panel scrolls.
+		return min(paneW, 120), max(14, paneH)
 	}
 	return min(paneW, 40), max(6, paneH/3) // medium
 }

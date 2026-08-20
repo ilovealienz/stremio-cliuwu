@@ -523,6 +523,17 @@ func (l *listModel) row(vi int, selected bool) string {
 	}
 
 	badge := it.Badge
+	if badge != "" {
+		// A marker in the value column as well as at the left edge: on a wide
+		// terminal the two are far enough apart that the left one alone
+		// doesn't tell you which value you're about to change. The space is
+		// reserved on every row so the badges stay in a column.
+		dot := "  "
+		if selected {
+			dot = stCursor.Render("• ")
+		}
+		badge = dot + badge
+	}
 	badgeW := lipgloss.Width(badge)
 
 	// Badges line up on a fixed right edge. Deriving the gap from a minimum

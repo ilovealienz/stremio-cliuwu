@@ -320,7 +320,9 @@ type Stream struct {
 	Name        string `json:"name"`
 	Title       string `json:"title"`
 	Description string `json:"description"`
-	Addon       string // injected
+
+	Addon string // injected
+	Rank  int    // injected: the addon's position in your list
 }
 
 // ── Episode queue ─────────────────────────────────────────────────────────────
@@ -403,7 +405,7 @@ func (q *EpQueue) SeasonEpisodes(season int) []Video {
 // configVersion is bumped whenever a new field needs a non-zero default.
 // Without this, adding a bool to the struct silently gives every existing
 // install `false`, because encoding/json just leaves absent fields alone.
-const configVersion = 9
+const configVersion = 10
 
 type AppConfig struct {
 	Version          int    `json:"version"`
@@ -424,6 +426,7 @@ type AppConfig struct {
 	DownloadFolders  bool   `json:"download_folders"`
 	MoviePattern     string `json:"movie_pattern"`
 	EpisodePattern   string `json:"episode_pattern"`
+	DateFormat       string `json:"date_format"`
 }
 
 // SetDefaults fills in anything missing. Returns true if it changed something,
@@ -484,9 +487,13 @@ func (c *AppConfig) SetDefaults() bool {
 		c.EpisodePattern = DefaultEpisodePattern
 		changed = true
 	}
+	if c.DateFormat == "" {
+		c.DateFormat = "dmy"
+		changed = true
+	}
 
 	if c.HistoryMax <= 0 {
-		c.HistoryMax = 100
+		c.HistoryMax = 300
 		changed = true
 	}
 	if c.OmdbKey == "" {
