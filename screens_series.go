@@ -95,9 +95,12 @@ func (s *seasonScreen) SetSize(w, h int) {
 func (s *seasonScreen) Footer() string {
 	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "episodes"},
-		[2]string{"i", "info"},
+		[2]string{"i", "toggle info"},
 		[2]string{"f", "favourite show"},
-		[2]string{"w", "mark season"},
+		[2]string{"w", "mark season watched"},
+		[2]string{"W", "mark whole season"},
+		[2]string{"p", "open full poster"},
+		[2]string{"I", "imdb"},
 		[2]string{"b/esc", "back"},
 	))
 }
@@ -248,11 +251,13 @@ func (s *seasonScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			// Favourite what the screen is showing, not what the cursor
 			// happens to be sitting on. Press f inside a season to pin that
 			// season instead.
-			AddFav(Favourite{
+			if ToggleFav(Favourite{
 				Name: s.show.Name, ID: s.show.ID, Type: s.show.Type,
 				Source: s.show.Source, Year: s.show.Year,
-			})
-			return s, toast("favourited " + s.show.Name)
+			}) {
+				return s, toast("favourited " + s.show.Name)
+			}
+			return s, toast("removed " + s.show.Name + " from favourites")
 		case "w", "W":
 			if i := s.list.Selected(); i >= 0 {
 				season := s.seasons[i]
@@ -364,11 +369,13 @@ func (s *episodeScreen) SetSize(w, h int) {
 func (s *episodeScreen) Footer() string {
 	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "streams"},
-		[2]string{"i", "info"},
+		[2]string{"i", "toggle info"},
 		[2]string{"f", "favourite season"},
-		[2]string{"w", "watched"},
-		[2]string{"W", "whole season"},
+		[2]string{"w", "mark watched"},
+		[2]string{"W", "mark whole season"},
 		[2]string{"/", "filter"},
+		[2]string{"p", "open full poster"},
+		[2]string{"I", "imdb"},
 		[2]string{"b/esc", "back"},
 	))
 }
@@ -480,11 +487,13 @@ func (s *episodeScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			pos, _, _ := GetPositionByEpisode(s.show.ID, s.season, s.eps[i].Episode)
 			return s, push(s.streamFor(i, pos))
 		case "f":
-			AddFav(Favourite{
+			if ToggleFav(Favourite{
 				Name: s.show.Name, ID: s.show.ID, Type: s.show.Type,
 				Source: s.show.Source, Year: s.show.Year, Season: s.season,
-			})
-			return s, toast(fmt.Sprintf("favourited %s S%02d", s.show.Name, s.season))
+			}) {
+				return s, toast(fmt.Sprintf("favourited %s S%02d", s.show.Name, s.season))
+			}
+			return s, toast(fmt.Sprintf("removed %s S%02d from favourites", s.show.Name, s.season))
 		case "w":
 			if i := s.list.Selected(); i >= 0 {
 				v := s.eps[i]

@@ -222,17 +222,18 @@ func (s *fileListScreen) SetSize(w, h int) {
 func (s *fileListScreen) Footer() string {
 	pairs := [][2]string{
 		{"enter", "play"},
-		{"0-9", "jump"},
+		{"/", "filter"},
+		{"0-9", "jump to row"},
 	}
 	if ctx.player.State().Alive {
-		pairs = append(pairs, [2]string{"n", "play next"})
+		pairs = append(pairs, [2]string{"n", "queue as next"})
 	}
 	pairs = append(pairs,
 		[2]string{"D", "download"},
-		[2]string{"A", "download all"},
-		[2]string{"s", "sort"})
+		[2]string{"A", "download everything here"},
+		[2]string{"s", "change sort"})
 	if s.nested {
-		pairs = append(pairs, [2]string{"F", "flat/folders"})
+		pairs = append(pairs, [2]string{"F", "flat or folders"})
 	}
 	pairs = append(pairs, [2]string{"/", "filter"}, [2]string{"b/esc", "back"})
 	return withStatus(s.list.Status(), keyHint(pairs...))

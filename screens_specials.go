@@ -52,7 +52,7 @@ func (s *specialsScreen) SetSize(w, h int) {
 
 func (s *specialsScreen) Footer() string {
 	return withStatus(s.list.Status(),
-		keyHint([2]string{"enter", "open"}, [2]string{"0-9", "jump"},
+		keyHint([2]string{"enter", "open"}, [2]string{"0-9", "jump to row"},
 			[2]string{"/", "filter"}, [2]string{"b/esc", "back"}))
 }
 

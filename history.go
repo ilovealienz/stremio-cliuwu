@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -205,6 +204,7 @@ func (h *historyStore) ep(showID, key string) *epState {
 
 func (h *historyStore) trimRecent() {
 	if n := recentLimit(); len(h.data.Recent) > n {
+		clear(h.data.Recent[n:])
 		h.data.Recent = h.data.Recent[:n]
 	}
 }
@@ -238,7 +238,7 @@ func (h *historyStore) Flush() {
 	h.mu.Unlock()
 
 	if err == nil {
-		writeAtomic(histFile(), b)
+		writeAtomic(histFile(), b, 0644)
 	}
 }
 
@@ -256,38 +256,6 @@ func WarmHistory() {
 // FlushHistory is called on the way out so the last few seconds aren't lost.
 func FlushHistory() { hist.Flush() }
 
-// writeAtomic writes to a temporary file and renames over the target.
-//
-// os.WriteFile truncates in place, so an interrupted write leaves a truncated
-// file rather than the previous one — losing history outright instead of a
-// few seconds of it.
-func writeAtomic(path string, b []byte) error {
-	ensureDir()
-
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
-	if err != nil {
-		return err
-	}
-	name := tmp.Name()
-
-	if _, err := tmp.Write(b); err != nil {
-		tmp.Close()
-		os.Remove(name)
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		os.Remove(name)
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		os.Remove(name)
-		return err
-	}
-
-	os.Chmod(name, 0644)
-	return os.Rename(name, path)
-}
 
 // ── In-progress cache ─────────────────────────────────────────────────────────
 
@@ -391,6 +359,8 @@ func (h *historyStore) pushRecent(e HistoryEntry, now int64) {
 		out = append(out, r)
 	}
 
+	// No clear needed here: the append below builds a new slice, so the old
+	// backing array goes unreachable whole.
 	h.data.Recent = append([]recentEntry{{
 		ShowID: e.ID, Season: e.Season, Episode: e.Episode,
 		VideoID: e.VideoID, EpTitle: e.EpTitle, Total: e.EpisodeTotal, At: now,
@@ -632,6 +602,7 @@ func ClearShow(id string) {
 			kept = append(kept, r)
 		}
 	}
+	clear(hist.data.Recent[len(kept):]) // drop the tail's strings
 	hist.data.Recent = kept
 
 	hist.reindex()

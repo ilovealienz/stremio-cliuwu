@@ -44,7 +44,7 @@ func (s *downloadsScreen) SetSize(w, h int) {
 func (s *downloadsScreen) Footer() string {
 	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "resume"},
-		[2]string{"x", "cancel"},
+		[2]string{"x", "cancel download"},
 		[2]string{"C", "clear finished"},
 		[2]string{"R", "rescan folder"},
 		[2]string{"b/esc", "back"},

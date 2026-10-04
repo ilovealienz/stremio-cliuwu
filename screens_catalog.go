@@ -273,15 +273,20 @@ func (s *catalogScreen) SetSize(w, h int) {
 }
 
 func (s *catalogScreen) Footer() string {
-	pairs := [][2]string{{"enter", "open"}, {"i", "info"}, {"f", "favourite"}, {"/", "filter"}}
+	pairs := [][2]string{{"enter", "open"}, {"i", "toggle info"}, {"f", "favourite"}, {"/", "filter"}}
 	if s.info.On() {
-		pairs = append(pairs, [2]string{"p", "poster"})
+		// Handled by the info pane rather than the screen, but listed here:
+		// the ? overlay is built from what the footer declares, so a key the
+		// screen does not mention is a key nobody finds.
+		pairs = append(pairs,
+			[2]string{"p", "open full poster"},
+			[2]string{"I", "imdb"})
 	}
 	if s.info.CanScroll() {
-		pairs = append(pairs, [2]string{"J/K", "scroll info"})
+		pairs = append(pairs, [2]string{"J/K", "scroll the panel"})
 	}
 	if len(s.ref.Genres) > 0 {
-		pairs = append(pairs, [2]string{"g", "genre"})
+		pairs = append(pairs, [2]string{"g", "pick genre"})
 	}
 	pairs = append(pairs, [2]string{"b/esc", "back"})
 	return withStatus(s.list.Status(), keyHint(pairs...))
@@ -403,8 +408,10 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "f":
 			if i := s.list.Selected(); i >= 0 && !s.moreRow(i) {
 				mt := s.metas[i]
-				AddFav(Favourite{Name: mt.Name, ID: mt.ID, Type: mt.Type, Source: mt.Source, Year: mt.Year})
-				return s, toast("favourited " + mt.Name)
+				if ToggleFav(Favourite{Name: mt.Name, ID: mt.ID, Type: mt.Type, Source: mt.Source, Year: mt.Year}) {
+					return s, toast("favourited " + mt.Name)
+				}
+				return s, toast("removed " + mt.Name + " from favourites")
 			}
 		case "esc", "backspace":
 			return s, pop()
@@ -514,11 +521,13 @@ func (s *searchScreen) SetSize(w, h int) {
 func (s *searchScreen) Footer() string {
 	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "open"},
-		[2]string{"i", "info"},
-		[2]string{"J/K", "scroll"},
-		[2]string{"tab", "category"},
+		[2]string{"i", "toggle info"},
+		[2]string{"J/K", "scroll the panel"},
+		[2]string{"tab", "filter by type"},
 		[2]string{"f", "favourite"},
 		[2]string{"/", "filter"},
+		[2]string{"p", "open full poster"},
+		[2]string{"I", "imdb"},
 		[2]string{"b/esc", "back"},
 	))
 }
@@ -575,8 +584,10 @@ func (s *searchScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "f":
 			if i := s.list.Selected(); i >= 0 && i < len(s.shown) {
 				mt := s.metas[s.shown[i]]
-				AddFav(Favourite{Name: mt.Name, ID: mt.ID, Type: mt.Type, Source: mt.Source, Year: mt.Year})
-				return s, toast("favourited " + mt.Name)
+				if ToggleFav(Favourite{Name: mt.Name, ID: mt.ID, Type: mt.Type, Source: mt.Source, Year: mt.Year}) {
+					return s, toast("favourited " + mt.Name)
+				}
+				return s, toast("removed " + mt.Name + " from favourites")
 			}
 		case "tab":
 			if len(s.cats) > 1 {

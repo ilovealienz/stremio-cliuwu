@@ -78,9 +78,9 @@ func (s *menuScreen) SetSize(w, h int) {
 func (s *menuScreen) Footer() string {
 	pairs := [][2]string{{"enter", "open"}}
 	if n := s.panel.Count(); n > 0 && s.panel.On() {
-		pairs = append(pairs, [2]string{fmt.Sprintf("1-%d", min(n, 9)), "resume"})
+		pairs = append(pairs, [2]string{fmt.Sprintf("1-%d", min(n, 9)), "resume from the panel"})
 	}
-	pairs = append(pairs, [2]string{"i", "panel"}, [2]string{"ctrl+q", "quit"})
+	pairs = append(pairs, [2]string{"i", "toggle panel"}, [2]string{"ctrl+q", "quit"})
 	return keyHint(pairs...)
 }
 

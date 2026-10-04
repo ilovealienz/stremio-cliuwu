@@ -563,6 +563,11 @@ type AppConfig struct {
 	DownloadFolders  bool   `json:"download_folders"`
 	MoviePattern     string `json:"movie_pattern"`
 	EpisodePattern   string `json:"episode_pattern"`
+
+	// What mpv shows as the title. "default" leaves mpv to work it out from
+	// the url, "formatted" uses the built-in forms, anything else is a
+	// pattern using the same placeholders as the download filenames.
+	MpvTitle string `json:"mpv_title"`
 	DateFormat       string `json:"date_format"`
 }
 
@@ -631,6 +636,11 @@ func (c *AppConfig) SetDefaults() bool {
 
 	if c.Version < 8 {
 		c.DownloadFolders = true
+		changed = true
+	}
+
+	if c.MpvTitle == "" {
+		c.MpvTitle = "default"
 		changed = true
 	}
 

@@ -40,12 +40,51 @@ func ensureDir() { os.MkdirAll(configDir(), 0700) }
 // debrid API key in the path (torrentio.strem.fun/torbox=<key>/manifest.json),
 // so addons.json is effectively a credentials file.
 func writeJSON(path string, v any) error {
-	ensureDir()
 	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0600)
+	return writeAtomic(path, b, 0600)
+}
+
+// writeAtomic writes to a temporary file in the same directory and renames
+// over the target.
+//
+// os.WriteFile truncates in place, so an interrupted write leaves a truncated
+// file rather than the previous one. For history that loses what you have
+// watched; for addons.json it loses the addon urls, which carry the debrid
+// keys and are not recoverable from anywhere else.
+func writeAtomic(path string, b []byte, perm os.FileMode) error {
+	ensureDir()
+
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
+	if err != nil {
+		return err
+	}
+	name := tmp.Name()
+
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	// Synced before the rename: a rename is atomic, but on a crash the
+	// directory entry can land before the contents do.
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(name)
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(name)
+		return err
+	}
+
+	if err := os.Chmod(name, perm); err != nil {
+		os.Remove(name)
+		return err
+	}
+	return os.Rename(name, path)
 }
 
 func readJSON(path string, v any) error {

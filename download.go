@@ -376,7 +376,7 @@ func (d *Downloader) save() {
 	d.mu.Unlock()
 
 	if b, err := json.Marshal(idx); err == nil {
-		writeAtomic(downloadsFile(), b)
+		writeAtomic(downloadsFile(), b, 0644)
 	}
 }
 
@@ -598,6 +598,9 @@ func (d *Downloader) Clear() {
 			kept = append(kept, it)
 		}
 	}
+	// Filtering in place leaves the dropped pointers in the tail of the
+	// backing array, where the collector can still see them.
+	clear(d.items[len(kept):])
 	d.items = kept
 }
 

@@ -76,9 +76,9 @@ func (s *subsScreen) Init() tea.Cmd {
 func (s *subsScreen) Footer() string {
 	pairs := [][2]string{{"enter", "try"}, {"0-9", "jump"}}
 	if len(s.langs) > 2 {
-		pairs = append(pairs, [2]string{"tab", "language"})
+		pairs = append(pairs, [2]string{"tab", "filter by language"})
 	}
-	pairs = append(pairs, [2]string{"R", "refetch"}, [2]string{"/", "filter"},
+	pairs = append(pairs, [2]string{"R", "refetch streams"}, [2]string{"/", "filter"},
 		[2]string{"b/esc", "back"})
 	return withStatus(s.list.Status(), keyHint(pairs...))
 }

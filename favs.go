@@ -17,23 +17,28 @@ func LoadFavs() FavouriteList {
 }
 
 func saveFavs(fl FavouriteList) {
-	ensureDir()
-	b, _ := json.MarshalIndent(fl, "", "  ")
-	os.WriteFile(favsFile(), b, 0644)
+	_ = writeJSON(favsFile(), fl)
 }
 
-func AddFav(f Favourite) {
+// ToggleFav adds a favourite, or removes it if it is already there.
+// Reports whether it is favourited afterwards.
+//
+// Keyed on id and season together: a season is favourited separately from its
+// show, so pressing f on season 3 should not clear the show itself.
+func ToggleFav(f Favourite) bool {
 	fl := LoadFavs()
-	f.Added = time.Now().Format("2006-01-02")
 	for i, ex := range fl.Items {
 		if ex.ID == f.ID && ex.Season == f.Season {
-			fl.Items[i] = f
+			fl.Items = append(fl.Items[:i], fl.Items[i+1:]...)
 			saveFavs(fl)
-			return
+			return false
 		}
 	}
+
+	f.Added = time.Now().Format("2006-01-02")
 	fl.Items = append(fl.Items, f)
 	saveFavs(fl)
+	return true
 }
 
 func RemoveFav(idx int) {

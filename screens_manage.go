@@ -37,7 +37,7 @@ func (s *favsScreen) SetSize(w, h int) {
 func (s *favsScreen) Footer() string {
 	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "open"},
-		[2]string{"d", "remove"},
+		[2]string{"d", "remove entry"},
 		[2]string{"/", "filter"},
 		[2]string{"b/esc", "back"},
 	))
@@ -302,11 +302,11 @@ func (s *addonsScreen) SetSize(w, h int) {
 
 func (s *addonsScreen) Footer() string {
 	return keyHint(
-		[2]string{"a", "add"},
-		[2]string{"d", "remove"},
-		[2]string{"t", "on/off"},
-		[2]string{"J/K", "reorder"},
-		[2]string{"r", "refresh"},
+		[2]string{"a", "add addon"},
+		[2]string{"d", "remove entry"},
+		[2]string{"t", "enable / disable"},
+		[2]string{"J/K", "move up / down"},
+		[2]string{"r", "refresh list"},
 		[2]string{"b/esc", "back"},
 	)
 }
@@ -455,7 +455,12 @@ func (s *settingsScreen) SetSize(w, h int) {
 }
 
 func (s *settingsScreen) Footer() string {
-	return keyHint([2]string{"enter", "edit / toggle"}, [2]string{"b/esc", "back"})
+	pairs := [][2]string{{"enter", "edit / toggle"}}
+	if s.update.State == updateAvailable {
+		pairs = append(pairs, [2]string{"u", "open the release"})
+	}
+	pairs = append(pairs, [2]string{"b/esc", "back"})
+	return keyHint(pairs...)
 }
 
 func onOff(b bool) string {
@@ -647,6 +652,12 @@ func (s *settingsScreen) rebuild() {
 			ctx.cfg.DownloadFolders = !ctx.cfg.DownloadFolders
 			return s.save()
 		}},
+		{label: "mpv title", sub: "default is the release name, formatted is Show - S03E01",
+			badge: orDash(c.MpvTitle), act: func() tea.Cmd {
+				ctx.cfg.MpvTitle = nextMpvTitle(ctx.cfg.MpvTitle)
+				return s.save()
+			}},
+
 		{label: "movie filename", sub: orDash(c.MoviePattern), act: func() tea.Cmd {
 			return s.prompt("movie filename", DefaultMoviePattern, ctx.cfg.MoviePattern, func(v string) tea.Cmd {
 				ctx.cfg.MoviePattern = v

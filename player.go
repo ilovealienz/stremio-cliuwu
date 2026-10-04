@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -334,6 +335,46 @@ func (p *Player) gone() {
 // property update for four seconds after each file load.
 func (p *Player) sendAsync(fn func()) { go fn() }
 
+// mpvTitle is what mpv should show as the media title.
+//
+// Empty leaves mpv to its own behaviour: the filename from the url path, or
+// whatever the server says in Content-Disposition, falling back to the url
+// itself. For a debrid link that is usually the release name.
+func mpvTitle(req PlayRequest) string {
+	e := req.Entry
+
+	switch ctx.cfg.MpvTitle {
+	case "default", "":
+		return ""
+
+	case "formatted":
+		if e.Episode > 0 {
+			return fmt.Sprintf("%s - %s", e.Name, fmtEp(e.Season, e.Episode, e.VideoID))
+		}
+		if e.Year != "" {
+			return fmt.Sprintf("%s (%s)", e.Name, e.Year)
+		}
+		return e.Name
+	}
+
+	// A pattern, using the same placeholders as the download filenames. The
+	// segments are joined back with a space: a title is one line, and the
+	// separators only mean folders when a path is being built.
+	vals := map[string]string{
+		"title": e.Name,
+		"year":  e.Year,
+		"show":  e.Name,
+	}
+	if e.Episode > 0 {
+		vals["season"] = fmt.Sprintf("%02d", e.Season)
+		vals["episode"] = fmt.Sprintf("%02d", e.Episode)
+		if e.EpTitle != "" {
+			vals["title"] = e.EpTitle
+		}
+	}
+	return strings.Join(expandPattern(ctx.cfg.MpvTitle, vals), " ")
+}
+
 // command sends an mpv IPC command and waits for the matching response.
 // command sends an mpv IPC command and waits the default time for a reply.
 func (p *Player) command(args ...any) (map[string]any, error) {
@@ -618,6 +659,14 @@ func (p *Player) play(req PlayRequest) tea.Msg {
 	}
 	if req.Entry.ID != "" {
 		AddHistory(req.Entry, histMax)
+	}
+
+	// Set before the load so mpv has it for the first frame. It is a global
+	// property rather than a per-file one, so it survives the loadfile.
+	if title := mpvTitle(req); title != "" {
+		p.command("set_property", "force-media-title", title)
+	} else {
+		p.command("set_property", "force-media-title", "")
 	}
 
 	if _, err := p.command("loadfile", req.URL, "replace"); err != nil {

@@ -168,13 +168,68 @@ func accentSwatch(name string) string {
 	return lipgloss.NewStyle().Foreground(resolveAccent(name)).Render("███")
 }
 
-// keyHint renders "k=label" pairs for the footer.
-func keyHint(pairs ...[2]string) string {
+// footerKeys is the most recent set of hints a screen asked for.
+//
+// Captured rather than passed around: keyHint is called once per frame, by
+// the top screen's Footer, so this always describes what is on the footer
+// right now. It lets ? list the keys the footer had no room for without every
+// screen having to declare the same list twice and keep the two in step.
+var footerKeys [][2]string
+
+// footerShown is how many hints the footer keeps before deferring to ?.
+//
+// Five is the usual advice and more than that stops being readable — the
+// stream picker had eleven, which is a wall of text rather than a reminder.
+const footerShown = 2
+
+// keyHintMore renders extra pairs the app appends to a screen's footer,
+// without disturbing what ? will show.
+//
+// keyHint captures what it renders so the overlay can list the keys the
+// footer trimmed. Calling it a second time to append the globals replaced
+// that capture with just the globals — which is how ? came to show "S, X"
+// followed by the whole global set again.
+func keyHintMore(pairs ...[2]string) string {
 	var out []string
 	for _, p := range pairs {
-		if p[0] == "" {
-			continue
+		if p[0] != "" {
+			out = append(out, stKey.Render(p[0])+stHint.Render("="+p[1]))
 		}
+	}
+	return stHint.Render("  ") + strings.Join(out, stHint.Render("  "))
+}
+
+// keyHint renders "k=label" pairs for the footer.
+//
+// Only the first few: screens list their keys in order of use, so the ones
+// that matter survive the trim and the rest move behind ?.
+func keyHint(pairs ...[2]string) string {
+	live := make([][2]string, 0, len(pairs))
+	for _, p := range pairs {
+		if p[0] != "" {
+			live = append(live, p)
+		}
+	}
+	footerKeys = live
+
+	shown := live
+	if len(live) > footerShown+1 {
+		shown = live[:footerShown]
+
+		// Back survives the trim wherever it is in the list. Screens put it
+		// last, being the least interesting thing they offer, which is also
+		// what makes it the first casualty — and it is the one key someone
+		// stuck on a screen actually needs.
+		for _, p := range live[footerShown:] {
+			if p[0] == "b/esc" || p[0] == "esc" {
+				shown = append(append([][2]string{}, live[:footerShown-1]...), p)
+				break
+			}
+		}
+	}
+
+	var out []string
+	for _, p := range shown {
 		out = append(out, stKey.Render(p[0])+stHint.Render("="+p[1]))
 	}
 	return stHint.Render("  ") + strings.Join(out, stHint.Render("  "))

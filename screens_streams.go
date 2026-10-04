@@ -136,33 +136,35 @@ func (s *streamScreen) SetSize(w, h int) {
 }
 
 func (s *streamScreen) Footer() string {
+	// Ordered for the footer, which keeps only the first few: the ones worth
+	// a permanent reminder come first, and everything else is a ? away.
 	pairs := [][2]string{
 		{"enter", "play"},
-		{"0-9", "jump"},
-	}
-	if s.blocked > 0 || s.showBlocked {
-		pairs = append(pairs, [2]string{"B", "blocked"})
+		{"/", "filter"},
+		{"D", "download"},
+		{"0-9", "jump to row"},
 	}
 	if ctx.player.State().Alive {
 		// Only meaningful while something's playing — otherwise there's
 		// nothing for it to follow.
-		pairs = append(pairs, [2]string{"n", "play next"})
+		pairs = append(pairs, [2]string{"n", "queue as next"})
+	}
+	if s.blocked > 0 || s.showBlocked {
+		pairs = append(pairs, [2]string{"B", "show blocked results"})
 	}
 	pairs = append(pairs,
-		[2]string{"D", "download"},
-		[2]string{"w", "watched"},
-		[2]string{"/", "filter"},
-		[2]string{"r", "reverse"},
-		[2]string{"R", "refetch"},
+		[2]string{"w", "mark watched"},
+		[2]string{"r", "reverse order"},
+		[2]string{"R", "refetch streams"},
 	)
 	if len(s.providers) > 2 {
-		pairs = append(pairs, [2]string{"tab", "provider"})
+		pairs = append(pairs, [2]string{"tab", "filter by addon"})
 	}
 	if s.target.Queue.HasPrev() {
-		pairs = append(pairs, [2]string{"[", "prev ep"})
+		pairs = append(pairs, [2]string{"[", "previous episode"})
 	}
 	if s.target.Queue.HasNext() {
-		pairs = append(pairs, [2]string{"]", "next ep"})
+		pairs = append(pairs, [2]string{"]", "next episode"})
 	}
 	pairs = append(pairs, [2]string{"b/esc", "back"})
 	out := keyHint(pairs...)

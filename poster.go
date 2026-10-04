@@ -72,6 +72,19 @@ var kittyModes = []string{"auto", "default", "kitty"}
 // posterQualities are the sizes metahub serves, roughly 41kB, 70kB and 270kB.
 var posterQualities = []string{"small", "medium", "large"}
 
+// mpvTitles are the two built-in title modes. A pattern set by hand in
+// config.json still works; cycling from one moves to default.
+var mpvTitles = []string{"default", "formatted"}
+
+func nextMpvTitle(cur string) string {
+	for i, m := range mpvTitles {
+		if m == cur {
+			return mpvTitles[(i+1)%len(mpvTitles)]
+		}
+	}
+	return "default"
+}
+
 func nextPosterQuality(cur string) string {
 	for i, q := range posterQualities {
 		if q == cur {
@@ -320,7 +333,6 @@ func posterVariants(url string, biggest bool) []string {
 	if i < 0 {
 		return []string{url}
 	}
-	_ = biggest
 	rest := url[i+len(host):]
 	j := strings.Index(rest, "/")
 	if j < 0 {
