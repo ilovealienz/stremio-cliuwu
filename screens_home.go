@@ -335,7 +335,7 @@ func (s *menuScreen) View() string {
 // menu › show › season › streams — meaning `b` out of the stream picker lands
 // on the episode list, the way the old client behaved.
 func resumeScreen(e HistoryEntry) screen {
-	m := Meta{ID: e.ID, Type: e.Type, Name: e.Name, Year: e.Year, Source: e.Source}
+	m := Meta{ID: e.ID, Type: e.Type, Name: e.Name, Year: e.Year, Source: e.Source, Base: e.Base}
 
 	// Episode number, not season: a special sits in season 0 and would
 	// otherwise be resumed as if it were a film.

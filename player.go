@@ -343,13 +343,32 @@ func (p *Player) sendAsync(fn func()) { go fn() }
 func mpvTitle(req PlayRequest) string {
 	e := req.Entry
 
-	switch ctx.cfg.MpvTitle {
-	case "default", "":
+	mode := ctx.cfg.MpvTitle
+	if mode == "" || mode == "default" {
 		return ""
+	}
 
+	// A library file has no metadata behind it. Its episode number is the
+	// file's position in the pack, recorded so history can tell the files
+	// apart, and its title is the filename — so there is nothing to format
+	// or to pattern against, in either mode.
+	if e.Type == "other" {
+		if t := strings.TrimSpace(e.EpTitle); t != "" {
+			return t
+		}
+		return e.Name
+	}
+
+	switch mode {
 	case "formatted":
 		if e.Episode > 0 {
-			return fmt.Sprintf("%s - %s", e.Name, fmtEp(e.Season, e.Episode, e.VideoID))
+			out := fmt.Sprintf("%s - %s", e.Name, fmtEp(e.Season, e.Episode, e.VideoID))
+			// Only when the addon has a real one. Some fill the field with
+			// "Episode #29.1", which says nothing the number has not.
+			if t := strings.TrimSpace(e.EpTitle); t != "" && !strings.HasPrefix(t, "Episode #") {
+				out += " - " + t
+			}
+			return out
 		}
 		if e.Year != "" {
 			return fmt.Sprintf("%s (%s)", e.Name, e.Year)
@@ -372,7 +391,7 @@ func mpvTitle(req PlayRequest) string {
 			vals["title"] = e.EpTitle
 		}
 	}
-	return strings.Join(expandPattern(ctx.cfg.MpvTitle, vals), " ")
+	return strings.Join(expandPattern(mode, vals), " ")
 }
 
 // command sends an mpv IPC command and waits for the matching response.

@@ -275,7 +275,7 @@ func (s *fileListScreen) request(idx int) PlayRequest {
 		URL:       v.URL(),
 		Entry: HistoryEntry{
 			Name: name, ID: s.meta.ID, Type: "other",
-			Source: s.meta.Source, Year: s.meta.Year,
+			Source: s.meta.Source, Year: s.meta.Year, Base: s.meta.Base,
 			Episode: idx + 1, EpTitle: file,
 			EpisodeTotal: len(s.videos),
 			VideoID:      v.ID,

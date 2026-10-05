@@ -61,7 +61,7 @@ func (s *favsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "enter":
 			if i := s.list.Selected(); i >= 0 {
 				f := s.favs[i]
-				m := Meta{ID: f.ID, Type: f.Type, Name: f.Name, Year: f.Year, Source: f.Source}
+				m := Meta{ID: f.ID, Type: f.Type, Name: f.Name, Year: f.Year, Source: f.Source, Base: f.Base}
 				return s, push(openMeta(m, func() int {
 					// A favourited show has season 0 meaning "the whole
 					// thing", not the specials season.
@@ -189,7 +189,7 @@ func (s *historyScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				sh := s.shows[i]
 				return s, push(openMeta(Meta{
 					ID: sh.ID, Type: sh.Type, Name: sh.Name,
-					Year: sh.Year, Source: sh.Source,
+					Year: sh.Year, Source: sh.Source, Base: sh.Base,
 				}, noSeason))
 			}
 			if i >= len(s.entries) {
@@ -496,6 +496,13 @@ func (s *settingsScreen) rebuild() {
 
 	s.rows = []settingRow{
 		{head: "playback"},
+
+		{label: "mpv title", sub: "default is the release name, formatted is Show - S03E01",
+			badge: orDash(c.MpvTitle), act: func() tea.Cmd {
+				ctx.cfg.MpvTitle = nextMpvTitle(ctx.cfg.MpvTitle)
+				return s.save()
+			}},
+
 		{label: "mpv path", badge: orDash(c.MpvPath), act: func() tea.Cmd {
 			return s.prompt("mpv path", "mpv", ctx.cfg.MpvPath, func(v string) tea.Cmd {
 				ctx.cfg.MpvPath = v
@@ -652,12 +659,6 @@ func (s *settingsScreen) rebuild() {
 			ctx.cfg.DownloadFolders = !ctx.cfg.DownloadFolders
 			return s.save()
 		}},
-		{label: "mpv title", sub: "default is the release name, formatted is Show - S03E01",
-			badge: orDash(c.MpvTitle), act: func() tea.Cmd {
-				ctx.cfg.MpvTitle = nextMpvTitle(ctx.cfg.MpvTitle)
-				return s.save()
-			}},
-
 		{label: "movie filename", sub: orDash(c.MoviePattern), act: func() tea.Cmd {
 			return s.prompt("movie filename", DefaultMoviePattern, ctx.cfg.MoviePattern, func(v string) tea.Cmd {
 				ctx.cfg.MoviePattern = v

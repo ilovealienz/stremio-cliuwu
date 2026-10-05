@@ -161,7 +161,7 @@ func FetchTargetInfo(e HistoryEntry) tea.Cmd {
 			return targetInfoMsg{Key: targetKey(e), Detail: d}
 		}
 
-		m := Meta{ID: e.ID, Type: e.Type, Name: e.Name, Source: e.Source}
+		m := Meta{ID: e.ID, Type: e.Type, Name: e.Name, Source: e.Source, Base: e.Base}
 		for _, v := range GetSeriesMeta(ctx.addons, m).Videos {
 			if v.ID == e.VideoID || (v.Season == e.Season && v.Episode == e.Episode) {
 				return targetInfoMsg{Key: targetKey(e), Video: v}

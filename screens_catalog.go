@@ -408,7 +408,7 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "f":
 			if i := s.list.Selected(); i >= 0 && !s.moreRow(i) {
 				mt := s.metas[i]
-				if ToggleFav(Favourite{Name: mt.Name, ID: mt.ID, Type: mt.Type, Source: mt.Source, Year: mt.Year}) {
+				if ToggleFav(Favourite{Name: mt.Name, ID: mt.ID, Type: mt.Type, Source: mt.Source, Year: mt.Year, Base: mt.Base}) {
 					return s, toast("favourited " + mt.Name)
 				}
 				return s, toast("removed " + mt.Name + " from favourites")
@@ -584,7 +584,7 @@ func (s *searchScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "f":
 			if i := s.list.Selected(); i >= 0 && i < len(s.shown) {
 				mt := s.metas[s.shown[i]]
-				if ToggleFav(Favourite{Name: mt.Name, ID: mt.ID, Type: mt.Type, Source: mt.Source, Year: mt.Year}) {
+				if ToggleFav(Favourite{Name: mt.Name, ID: mt.ID, Type: mt.Type, Source: mt.Source, Year: mt.Year, Base: mt.Base}) {
 					return s, toast("favourited " + mt.Name)
 				}
 				return s, toast("removed " + mt.Name + " from favourites")

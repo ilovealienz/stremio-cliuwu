@@ -57,6 +57,11 @@ type showState struct {
 	Year   string `json:"year,omitempty"`
 	SeenAt int64  `json:"seen_at,omitempty"`
 
+	// The addon that served a library entry. Kept on the show rather than
+	// on a recent row, because recent rows age out and the entry is still
+	// openable from the grouped view long afterwards.
+	Base string `json:"base,omitempty"`
+
 	// Keyed "season:episode". Movies use "0:0".
 	Eps map[string]*epState `json:"eps,omitempty"`
 }
@@ -191,6 +196,9 @@ func (h *historyStore) show(id string, m Meta) *showState {
 	}
 	if m.Year != "" {
 		sh.Year = m.Year
+	}
+	if m.Base != "" {
+		sh.Base = m.Base
 	}
 	return sh
 }
@@ -330,7 +338,7 @@ func AddHistory(e HistoryEntry, maxEntries int) {
 	defer hist.mu.Unlock()
 	hist.load()
 
-	sh := hist.show(e.ID, Meta{Name: e.Name, Type: e.Type, Source: e.Source, Year: e.Year})
+	sh := hist.show(e.ID, Meta{Name: e.Name, Type: e.Type, Source: e.Source, Year: e.Year, Base: e.Base})
 	now := time.Now().Unix()
 	sh.SeenAt = now
 
@@ -406,7 +414,7 @@ func SetWatchedByEpisode(e HistoryEntry, watched bool) {
 	defer hist.mu.Unlock()
 	hist.load()
 
-	sh := hist.show(e.ID, Meta{Name: e.Name, Type: e.Type, Source: e.Source, Year: e.Year})
+	sh := hist.show(e.ID, Meta{Name: e.Name, Type: e.Type, Source: e.Source, Year: e.Year, Base: e.Base})
 	key := epKey(e.Season, e.Episode)
 
 	st := sh.Eps[key]
@@ -527,6 +535,7 @@ func (h *historyStore) recentEntries() HistoryList {
 		e := HistoryEntry{
 			Name: sh.Name, ID: r.ShowID, Type: sh.Type, Source: sh.Source, Year: sh.Year,
 			Season: r.Season, Episode: r.Episode, VideoID: r.VideoID, EpTitle: r.EpTitle,
+			Base: sh.Base,
 			EpisodeTotal: r.Total, WatchedAt: time.Unix(r.At, 0),
 			NextVideoID:  r.NextVideoID, NextSeason: r.NextSeason,
 			NextEpisode:  r.NextEpisode, NextTitle: r.NextTitle,
@@ -548,6 +557,7 @@ type ShowSummary struct {
 	Type     string
 	Source   string
 	Year     string
+	Base     string
 	Episodes int   // watched or part-watched
 	SeenAt   int64 // most recent activity
 }
@@ -575,7 +585,7 @@ func HistoryShows() []ShowSummary {
 		}
 		out = append(out, ShowSummary{
 			ID: id, Name: sh.Name, Type: sh.Type, Source: sh.Source,
-			Year: sh.Year, Episodes: n, SeenAt: sh.SeenAt,
+			Year: sh.Year, Base: sh.Base, Episodes: n, SeenAt: sh.SeenAt,
 		})
 	}
 
