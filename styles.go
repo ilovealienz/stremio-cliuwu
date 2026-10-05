@@ -180,7 +180,7 @@ var footerKeys [][2]string
 //
 // Five is the usual advice and more than that stops being readable — the
 // stream picker had eleven, which is a wall of text rather than a reminder.
-const footerShown = 4
+const footerShown = 2
 
 // keyHintMore renders extra pairs the app appends to a screen's footer,
 // without disturbing what ? will show.
@@ -212,15 +212,6 @@ func keyHint(pairs ...[2]string) string {
 	}
 	footerKeys = live
 
-	// Always advertised, trimming or not: even a screen whose keys all fit
-	// has the globals behind it, and a key that only appears sometimes is
-	// one nobody learns.
-	hasHelp := false
-	for _, p := range live {
-		if p[0] == "?" {
-			hasHelp = true
-		}
-	}
 
 	shown := live
 	if len(live) > footerShown+1 {
@@ -241,9 +232,6 @@ func keyHint(pairs ...[2]string) string {
 	var out []string
 	for _, p := range shown {
 		out = append(out, stKey.Render(p[0])+stHint.Render("="+p[1]))
-	}
-	if !hasHelp {
-		out = append(out, stKey.Render("?")+stHint.Render("=keys"))
 	}
 	return stHint.Render("  ") + strings.Join(out, stHint.Render("  "))
 }
