@@ -177,10 +177,19 @@ func FetchCatalog(ref CatalogRef, skip int, genre string) ([]Meta, bool, error) 
 		return nil, false, err
 	}
 
+	// A type-mismatched id now survives the decode as an empty string rather
+	// than failing the whole catalog, so drop those rows — there's nothing to
+	// play behind them.
 	src := sourceOf(ref.Type)
+	metas := resp.Metas[:0]
 	for i := range resp.Metas {
+		if resp.Metas[i].ID == "" {
+			continue
+		}
 		resp.Metas[i].normalize(src, ref.Base)
+		metas = append(metas, resp.Metas[i])
 	}
+	resp.Metas = metas
 
 	cacheCatalog.Set(key, resp.Metas)
 	return resp.Metas, resp.HasMore, nil
@@ -299,6 +308,48 @@ func metaBases(addons []Addon, mediaType, id, hint string) []string {
 	return out
 }
 
+// metaBasesUndeclared returns addons that serve meta for this type but whose
+// idPrefixes don't cover this id.
+//
+// Some addons serve more than they advertise: mediafusion declares meta for
+// its own mf: and dl: prefixes yet answers imdb ids too, and it carries
+// ratings for new releases that cinemeta hasn't picked up. Asking one is
+// off-spec, so these are a last resort — only once a declared addon has left
+// a field empty, and at worst they 404.
+func metaBasesUndeclared(addons []Addon, mediaType, id string) []string {
+	var out []string
+	for _, a := range addons {
+		if a.Err != nil || a.SupportsResource("meta", mediaType, id) {
+			continue
+		}
+		// Must still declare meta for this media type; only the id prefix
+		// is being disregarded. SupportsResource can't express that, since
+		// an empty id matches no prefix.
+		typeOK := false
+		for _, sr := range a.parseResources("meta") {
+			if len(sr.types) == 0 {
+				typeOK = true
+			}
+			for _, t := range sr.types {
+				if t == mediaType {
+					typeOK = true
+					break
+				}
+			}
+			if typeOK {
+				break
+			}
+		}
+		if !typeOK {
+			continue
+		}
+		if base := addonBase(a); base != "" {
+			out = append(out, base)
+		}
+	}
+	return out
+}
+
 var cacheMetaDetail = newCache[MetaDetail](30*time.Minute, 300)
 
 // GetMetaDetail fetches the full meta object for one title, asking whichever
@@ -309,15 +360,46 @@ func GetMetaDetail(addons []Addon, mediaType, id, hint string) (MetaDetail, bool
 		return v, v.ID != ""
 	}
 
-	for _, base := range metaBases(addons, mediaType, id, hint) {
-		var resp struct {
-			Meta MetaDetail `json:"meta"`
+	// The first addon to answer wins, but cinemeta lags on new releases and
+	// returns an empty rating or runtime for them while another addon has
+	// both. So keep asking until the gaps are filled, and stop as soon as
+	// they are — for anything cinemeta knows about, that's one request.
+	var best MetaDetail
+
+	ask := func(bases []string) {
+		for _, base := range bases {
+			if best.ImdbRating != "" && best.Runtime != "" {
+				return
+			}
+			var resp struct {
+				Meta MetaDetail `json:"meta"`
+			}
+			u := fmt.Sprintf("%s/meta/%s/%s.json", base, mediaType, url.PathEscape(id))
+			if getJSON(u, &resp) != nil || resp.Meta.Name == "" {
+				continue
+			}
+
+			if best.Name == "" {
+				best = resp.Meta
+				continue
+			}
+			if best.ImdbRating == "" {
+				best.ImdbRating = resp.Meta.ImdbRating
+			}
+			if best.Runtime == "" {
+				best.Runtime = resp.Meta.Runtime
+			}
 		}
-		u := fmt.Sprintf("%s/meta/%s/%s.json", base, mediaType, url.PathEscape(id))
-		if getJSON(u, &resp) == nil && resp.Meta.Name != "" {
-			cacheMetaDetail.Set(key, resp.Meta)
-			return resp.Meta, true
-		}
+	}
+
+	ask(metaBases(addons, mediaType, id, hint))
+	if best.ImdbRating == "" || best.Runtime == "" {
+		ask(metaBasesUndeclared(addons, mediaType, id))
+	}
+
+	if best.Name != "" {
+		cacheMetaDetail.Set(key, best)
+		return best, true
 	}
 
 	cacheMetaDetail.Set(key, MetaDetail{}) // negative cache, don't re-ask

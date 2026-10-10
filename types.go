@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -242,6 +243,37 @@ func (a Addon) SupportsResource(name, mediaType, id string) bool {
 	return false
 }
 
+// FlexString is a string that tolerates a non-string scalar in JSON.
+//
+// Addons disagree on whether runtime and imdbRating are strings or numbers.
+// getJSON no longer fails the whole response over a mismatch, but that leaves
+// the field empty; this keeps the value.
+type FlexString string
+
+func (s *FlexString) UnmarshalJSON(b []byte) error {
+	t := strings.TrimSpace(string(b))
+	if t == "" || t == "null" {
+		*s = ""
+		return nil
+	}
+	if t[0] == '"' {
+		var str string
+		if err := json.Unmarshal(b, &str); err != nil {
+			return err
+		}
+		*s = FlexString(str)
+		return nil
+	}
+	// An object or array isn't a value worth rendering, but it mustn't fail
+	// the decode either — kitsu_id arrives as an array on some meta objects.
+	if t[0] == '[' || t[0] == '{' {
+		*s = ""
+		return nil
+	}
+	*s = FlexString(t) // number or bool — keep the literal text
+	return nil
+}
+
 // MetaDetail is the full meta object. Catalog rows only carry enough to draw
 // a list; this is what the /meta/ endpoint actually returns, and it's fetched
 // lazily for whichever row you're looking at.
@@ -251,14 +283,14 @@ type MetaDetail struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 
-	ReleaseInfo string `json:"releaseInfo"`
-	Released    string `json:"released"`
-	Runtime     string `json:"runtime"`
-	ImdbRating  string `json:"imdbRating"`
-	Country     string `json:"country"`
-	Awards      string `json:"awards"`
-	Status      string `json:"status"`
-	Poster      string `json:"poster"`
+	ReleaseInfo string     `json:"releaseInfo"`
+	Released    string     `json:"released"`
+	Runtime     FlexString `json:"runtime"`
+	ImdbRating  FlexString `json:"imdbRating"`
+	Country     string     `json:"country"`
+	Awards      string     `json:"awards"`
+	Status      string     `json:"status"`
+	Poster      string     `json:"poster"`
 
 	// Sent by cinemeta on films and series alike. Usually the same as ID,
 	// but an addon with its own id scheme carries the mapping here — which
@@ -376,10 +408,6 @@ type SeriesMeta struct {
 	Poster string  `json:"poster"`
 	Year   string  `json:"releaseInfo"`
 	ImdbID string  `json:"imdb_id"`
-
-	// The show's typical episode length. Cinemeta carries no per-episode
-	// duration, so this is the only figure available.
-	Runtime string `json:"runtime"`
 	Videos []Video `json:"videos"`
 }
 

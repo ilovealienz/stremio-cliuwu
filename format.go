@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+// fmtRating normalises a rating for display. Addons disagree on precision:
+// cinemeta sends one decimal, others pass a tmdb score through with three.
+func fmtRating(s string) string {
+	f, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
+	if err != nil {
+		return s
+	}
+	return strconv.FormatFloat(f, 'f', 1, 64)
+}
+
 func fmtSecs(s float64) string {
 	if s < 0 {
 		s = 0

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -71,7 +72,23 @@ func getJSONTimeout(u string, out any, timeout time.Duration) error {
 		return fmt.Errorf("got a web page, not json — wrong url, or the addon has moved")
 	}
 
-	return json.NewDecoder(body).Decode(out)
+	err = json.NewDecoder(body).Decode(out)
+
+	// A field whose type doesn't match isn't a reason to throw the response
+	// away. Addons disagree on whether runtime, imdbRating and version are
+	// strings or numbers, and encoding/json saves the type error and decodes
+	// everything else — so the object is intact, and returning the error here
+	// is what discarded it. The cost was a blank info panel, a missing episode
+	// list, or an addon marked dead, cached for the next half hour.
+	//
+	// Syntax errors stay fatal because they're still returned. A wholly wrong
+	// shape decodes to a zero value, which every caller already rejects by
+	// checking that a required field came back.
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		return nil
+	}
+	return err
 }
 
 // ── Streams ───────────────────────────────────────────────────────────────────

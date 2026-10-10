@@ -375,10 +375,10 @@ func (p *continuePanel) episodeBlock(e HistoryEntry, budget int) []string {
 			facts = append(facts, e.Year)
 		}
 		if d.Runtime != "" {
-			facts = append(facts, d.Runtime)
+			facts = append(facts, string(d.Runtime))
 		}
 		if d.ImdbRating != "" && d.ImdbRating != "N/A" {
-			facts = append(facts, "★ "+d.ImdbRating)
+			facts = append(facts, "★ "+fmtRating(string(d.ImdbRating)))
 		}
 		if len(facts) > 0 {
 			out = append(out, stKey.Render(strings.Join(facts, "  ·  ")))
