@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -37,6 +39,12 @@ var downloadClient = &http.Client{
 		ForceAttemptHTTP2:     true,
 	},
 }
+
+// errStopped marks a download the user stopped. It has to be distinct from
+// both success and failure: returning nil let fetch promote the partial file
+// to its final name, which looked like a finished download and destroyed the
+// sidecar the resume depends on.
+var errStopped = errors.New("stopped")
 
 type DownloadState int
 
@@ -120,9 +128,12 @@ func readPartInfo(final string) (partInfo, bool) {
 	return pi, true
 }
 
+// Written atomically for the same reason as the index: a truncated sidecar
+// fails to parse, and then both Load and Scan skip the file, leaving the
+// .part invisible on disk with nothing to clean it up.
 func writePartInfo(final string, pi partInfo) {
 	if b, err := json.Marshal(pi); err == nil {
-		os.WriteFile(infoPath(final), b, 0644)
+		writeAtomic(infoPath(final), b, 0644)
 	}
 }
 
@@ -389,11 +400,15 @@ type Downloader struct {
 	running bool
 	cancel  map[int]bool
 
+	// Aborts the in-flight request. Polling a flag between reads only notices
+	// a stop once more bytes arrive, so a stalled connection ignored it.
+	abort map[int]context.CancelFunc
+
 	prog *tea.Program
 }
 
 func NewDownloader() *Downloader {
-	return &Downloader{cancel: map[int]bool{}}
+	return &Downloader{cancel: map[int]bool{}, abort: map[int]context.CancelFunc{}}
 }
 
 func (d *Downloader) Attach(p *tea.Program) { d.prog = p }
@@ -412,11 +427,46 @@ func (d *Downloader) Add(label, url, path string) (string, bool) {
 	}
 
 	d.mu.Lock()
+
+	// One entry per path, whatever state it's in. Matching only queued and
+	// active meant re-queueing a stopped or failed episode appended a second
+	// row pointing at the same part file, and whichever ran second decided
+	// what the bytes were — the other row's progress was a fiction.
 	for _, it := range d.items {
-		if it.Path == path && (it.State == DLQueued || it.State == DLActive) {
+		if it.Path != path {
+			continue
+		}
+		if it.State == DLQueued || it.State == DLActive {
 			d.mu.Unlock()
 			return "already in the queue", false
 		}
+
+		// Stopped, failed, or finished with the file since deleted. Take the
+		// fresh url: the old one may well have expired, and fetch compares it
+		// against the sidecar before trusting the partial bytes.
+		//
+		// Safe to write these without racing fetch, which reads URL and Label
+		// unlocked: the branch above returns early for a queued or active
+		// entry, so nothing here is touching one a worker holds.
+		it.URL = url
+		if label != "" {
+			it.Label = label
+		}
+		it.State, it.Err, it.Speed = DLQueued, nil, 0
+
+		// Read anything the return value needs while the lock is still held.
+		queued := it.Label
+		start := !d.running
+		if start {
+			d.running = true
+		}
+		d.mu.Unlock()
+
+		if start {
+			go d.worker()
+		}
+		d.save()
+		return "queued " + queued, true
 	}
 
 	d.seq++
@@ -564,8 +614,11 @@ func (d *Downloader) Pending() int {
 }
 
 // Cancel stops an active download or drops a queued one. The partial file is
-// left in place so it can be resumed later.
-func (d *Downloader) Cancel(id int) {
+// left in place so it can be resumed later; Remove is the one that deletes.
+//
+// Reports whether there was anything to stop, so the caller doesn't claim to
+// have cancelled a download that already finished.
+func (d *Downloader) Cancel(id int) bool {
 	defer d.save()
 
 	d.mu.Lock()
@@ -580,13 +633,73 @@ func (d *Downloader) Cancel(id int) {
 			it.State = DLCancelled
 		case DLActive:
 			d.cancel[id] = true
+			if abort := d.abort[id]; abort != nil {
+				abort()
+			}
+		default:
+			return false // already finished, failed or stopped
 		}
-		return
+		// A rate from the moment it stopped isn't current any more.
+		it.Speed = 0
+		return true
 	}
+	return false
 }
 
-// Clear removes finished entries from the list.
-func (d *Downloader) Clear() {
+// Remove drops an entry and deletes its partial file and sidecar.
+//
+// Clearing the list alone wasn't enough: Scan rebuilds an entry from any
+// sidecar it finds, so a row removed while its files were still on disk came
+// straight back on the next scan.
+func (d *Downloader) Remove(id int) bool {
+	d.mu.Lock()
+
+	var path string
+	found := false
+	kept := d.items[:0]
+	for _, it := range d.items {
+		if it.ID != id {
+			kept = append(kept, it)
+			continue
+		}
+		found, path = true, it.Path
+		if it.State == DLActive {
+			d.cancel[id] = true
+			if abort := d.abort[id]; abort != nil {
+				abort()
+			}
+		}
+	}
+	if found {
+		clear(d.items[len(kept):])
+		d.items = kept
+	}
+	d.mu.Unlock()
+
+	if !found {
+		return false
+	}
+
+	// The worker may still be writing to the part file for a moment after the
+	// abort. Removing the sidecar first is what matters: without it neither
+	// Load nor Scan will rebuild the entry, so a part file that outlives this
+	// call is inert rather than resurrected.
+	os.Remove(infoPath(path))
+	os.Remove(partPath(path))
+	d.save()
+	// Deliberately no emit here. A confirm screen runs its onYes inline from
+	// Update, on the ui goroutine, and Send blocks until the event loop reads
+	// the channel — which it can't while it's inside Update. The caller
+	// returns a DownloadTickMsg as a command instead.
+	return true
+}
+
+// Clear removes completed entries from the list.
+//
+// Only DLDone: a stopped or failed download still has a part file and sidecar
+// beside it, and dropping the row without deleting those just means Scan
+// rebuilds it. Use Remove for those, which deletes both.
+func (d *Downloader) Clear() int {
 	defer d.save()
 
 	d.mu.Lock()
@@ -594,14 +707,16 @@ func (d *Downloader) Clear() {
 
 	kept := d.items[:0]
 	for _, it := range d.items {
-		if it.State == DLQueued || it.State == DLActive {
+		if it.State != DLDone {
 			kept = append(kept, it)
 		}
 	}
+	gone := len(d.items) - len(kept)
 	// Filtering in place leaves the dropped pointers in the tail of the
 	// backing array, where the collector can still see them.
 	clear(d.items[len(kept):])
 	d.items = kept
+	return gone
 }
 
 func (d *Downloader) next() *Download {
@@ -628,8 +743,9 @@ func (d *Downloader) worker() {
 		err := d.fetch(dl)
 
 		d.mu.Lock()
-		cancelled := d.cancel[dl.ID]
+		cancelled := d.cancel[dl.ID] || errors.Is(err, errStopped)
 		delete(d.cancel, dl.ID)
+		delete(d.abort, dl.ID)
 		switch {
 		case cancelled:
 			dl.State = DLCancelled
@@ -667,7 +783,20 @@ func (d *Downloader) fetch(dl *Download) error {
 		os.Remove(infoPath(dl.Path))
 	}
 
-	req, err := http.NewRequest("GET", dl.URL, nil)
+	// A cancel has to abort the request itself. Checking a flag between reads
+	// only takes effect once the next read returns, so a stalled transfer sat
+	// there ignoring it.
+	rctx, abort := context.WithCancel(context.Background())
+	defer abort()
+	d.mu.Lock()
+	d.abort[dl.ID] = abort
+	stopped := d.cancel[dl.ID]
+	d.mu.Unlock()
+	if stopped {
+		return errStopped
+	}
+
+	req, err := http.NewRequestWithContext(rctx, "GET", dl.URL, nil)
 	if err != nil {
 		return err
 	}
@@ -695,14 +824,33 @@ func (d *Downloader) fetch(dl *Download) error {
 		return fmt.Errorf("server said %s", res.Status)
 	}
 
+	// ContentLength is -1 when the server doesn't say. Carrying that through
+	// made Total negative on the next resume, which turned the progress bar
+	// and the ETA into nonsense. Zero means unknown everywhere else.
 	total := res.ContentLength
-	if total > 0 {
+	switch {
+	case total > 0:
 		total += offset
+	default:
+		total = 0
 	}
 
 	d.mu.Lock()
 	dl.Done, dl.Total, dl.Resume = offset, total, offset > 0
 	d.mu.Unlock()
+
+	// The size is known now, and nothing has been written yet — running out
+	// midway surfaces as a short write that says nothing about the cause.
+	// Ahead of the sidecar too, so a refusal doesn't leave one behind with no
+	// part file beside it.
+	if need := total - offset; need > 0 {
+		dir := filepath.Dir(dl.Path)
+		if avail, ok := freeSpace(dir); ok && avail < uint64(need) {
+			return fmt.Errorf("not enough space in %s — %s free, needs %s",
+				dir, fmtBytes(int64(avail)), fmtBytes(need))
+		}
+	}
+
 	writePartInfo(dl.Path, partInfo{URL: dl.URL, Total: total, Label: dl.Label})
 
 	flag := os.O_CREATE | os.O_WRONLY
@@ -722,6 +870,18 @@ func (d *Downloader) fetch(dl *Download) error {
 		return err
 	}
 
+	// A clean EOF doesn't mean a complete file — a dropped connection ends the
+	// same way. Without this the short file got renamed into place and then
+	// looked finished to Add, to Load and on screen, with the sidecar deleted
+	// so it couldn't be resumed either.
+	d.mu.Lock()
+	got, want := dl.Done, dl.Total
+	d.mu.Unlock()
+	if want > 0 && got < want {
+		return fmt.Errorf("connection ended early at %s of %s — enter to resume",
+			fmtBytes(got), fmtBytes(want))
+	}
+
 	// Rename only once the bytes are all there, so a half file never looks
 	// like a finished one.
 	if err := os.Rename(part, dl.Path); err != nil {
@@ -735,14 +895,19 @@ func (d *Downloader) copy(dl *Download, dst io.Writer, src io.Reader) error {
 	buf := make([]byte, 256*1024)
 
 	lastEmit := time.Now()
+
+	// Every other access to Done is under the lock, and the race detector
+	// counts this one even though fetch set it before starting this goroutine.
+	d.mu.Lock()
 	lastBytes := dl.Done
+	d.mu.Unlock()
 
 	for {
 		d.mu.Lock()
 		stop := d.cancel[dl.ID]
 		d.mu.Unlock()
 		if stop {
-			return nil // partial file and sidecar stay put for a resume
+			return errStopped // partial file and sidecar stay put for a resume
 		}
 
 		n, rerr := src.Read(buf)
@@ -768,6 +933,15 @@ func (d *Downloader) copy(dl *Download, dst io.Writer, src io.Reader) error {
 			return nil
 		}
 		if rerr != nil {
+			// Our own abort surfaces here as a read error. It isn't a failure,
+			// and reporting it as one would mark the download failed and show
+			// the cancellation as the reason.
+			d.mu.Lock()
+			stopped := d.cancel[dl.ID]
+			d.mu.Unlock()
+			if stopped || errors.Is(rerr, context.Canceled) {
+				return errStopped
+			}
 			return rerr
 		}
 	}

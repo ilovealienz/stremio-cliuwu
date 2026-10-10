@@ -33,6 +33,12 @@ func (s *downloadsScreen) Init() tea.Cmd {
 	return nil
 }
 
+// downloadTick asks the downloads list to rebuild. Safe from inside Update,
+// unlike Downloader.emit, which Sends.
+func downloadTick() tea.Cmd {
+	return func() tea.Msg { return DownloadTickMsg{} }
+}
+
 func (s *downloadsScreen) Title() string { return "downloads" }
 func (s *downloadsScreen) Typing() bool  { return s.list.Typing() }
 
@@ -44,7 +50,8 @@ func (s *downloadsScreen) SetSize(w, h int) {
 func (s *downloadsScreen) Footer() string {
 	return withStatus(s.list.Status(), keyHint(
 		[2]string{"enter", "resume"},
-		[2]string{"x", "cancel download"},
+		[2]string{"x", "stop"},
+		[2]string{"D", "delete"},
 		[2]string{"C", "clear finished"},
 		[2]string{"R", "rescan folder"},
 		[2]string{"b/esc", "back"},
@@ -142,12 +149,38 @@ func (s *downloadsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			return s, toast("nothing unfinished on disk")
 		case "x":
 			if i := s.list.Selected(); i >= 0 && i < len(s.items) {
-				ctx.downloader.Cancel(s.items[i].ID)
+				// The row calls this "stopped" and offers enter to resume, so
+				// the toast shouldn't claim the download was cancelled.
+				if !ctx.downloader.Cancel(s.items[i].ID) {
+					return s, toast("nothing to stop")
+				}
 				s.rebuild()
-				return s, toast("cancelled")
+				return s, toast("stopped — enter to resume, D to delete")
+			}
+		// Not X: that's taken globally for stopping mpv, so it never reaches
+		// this screen while something is playing.
+		case "D", "delete":
+			if i := s.list.Selected(); i >= 0 && i < len(s.items) {
+				label := s.items[i].Label
+				id := s.items[i].ID
+				// The confirm pops itself before running this, and defaults to
+				// no, since the partial bytes are gone for good.
+				return s, push(newDestructive("delete",
+					"delete "+label+" and its partial file?", "delete",
+					func() tea.Cmd {
+						if !ctx.downloader.Remove(id) {
+							return toast("already gone")
+						}
+						// onYes runs inline on the ui goroutine, so the refresh
+						// has to be a command rather than a Send from Remove.
+						return tea.Batch(toast("deleted "+label), downloadTick())
+					},
+				))
 			}
 		case "C":
-			ctx.downloader.Clear()
+			if n := ctx.downloader.Clear(); n == 0 {
+				return s, toast("nothing finished to clear")
+			}
 			s.rebuild()
 			return s, toast("cleared finished downloads")
 		case "esc", "backspace":

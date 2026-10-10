@@ -410,22 +410,47 @@ func (a *app) refreshTop() tea.Cmd {
 }
 
 // quitCmd confirms first when something is playing, since quitting takes mpv
-// with it under the default settings.
+// with it under the default settings, and when downloads are still running,
+// since the queue lives in this process and goes with it.
 func quitCmd() tea.Cmd {
-	if !ctx.player.State().Alive {
+	playing := ctx.player.State().Alive
+	pending := 0
+	if ctx.downloader != nil {
+		pending = ctx.downloader.Pending()
+	}
+
+	if !playing && pending == 0 {
 		return tea.Quit
 	}
-	msg := "stop watching and quit?"
-	noLabel := "keep watching"
-	if !ctx.cfg.CloseMpvOnExit {
-		msg = "quit? mpv will keep playing."
+
+	var msg, noLabel string
+	switch {
+	case playing && pending > 0:
+		// The part files survive, so this is interrupted rather than lost.
+		msg = fmt.Sprintf("stop watching and quit? %s still downloading.", plural(pending, "file"))
+		noLabel = "keep watching"
+		if !ctx.cfg.CloseMpvOnExit {
+			msg = fmt.Sprintf("quit? mpv keeps playing, but %s still downloading.", plural(pending, "file"))
+			noLabel = "stay"
+		}
+	case pending > 0:
+		msg = fmt.Sprintf("quit? %s still downloading — they'll resume next time.", plural(pending, "file"))
 		noLabel = "stay"
+	default:
+		msg = "stop watching and quit?"
+		noLabel = "keep watching"
+		if !ctx.cfg.CloseMpvOnExit {
+			msg = "quit? mpv will keep playing."
+			noLabel = "stay"
+		}
 	}
+
 	return push(newChoice("quit", msg, "quit", noLabel,
 		func() tea.Cmd { return tea.Quit },
 		nil,
 	))
 }
+
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
