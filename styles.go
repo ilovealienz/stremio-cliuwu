@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 )
 
@@ -250,10 +251,25 @@ func withStatus(status, hints string) string {
 
 // clamp truncates an ANSI-containing string to w display columns.
 func clamp(s string, w int) string {
+	out, _ := clampW(s, w)
+	return out
+}
+
+// clampW is clamp plus the result's width. Multi-line or tabbed input keeps
+// the lipgloss path, which pads lines and expands tabs.
+func clampW(s string, w int) (string, int) {
 	if w <= 0 {
-		return ""
+		return "", 0
 	}
-	return lipgloss.NewStyle().MaxWidth(w).Render(s)
+	if strings.ContainsAny(s, "\n\t\r") {
+		out := lipgloss.NewStyle().MaxWidth(w).Render(s)
+		return out, lipgloss.Width(out)
+	}
+	if sw := ansi.StringWidth(s); sw <= w {
+		return s, sw
+	}
+	out := ansi.Truncate(s, w, "")
+	return out, ansi.StringWidth(out)
 }
 
 // ellipsize truncates to w columns with a trailing marker, ANSI-aware.

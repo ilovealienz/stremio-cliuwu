@@ -124,14 +124,17 @@ threshold scales with runtime.
 
 **`i` opens an info panel** with the synopsis, cast and rating — on catalogs,
 seasons and episodes. It opens itself on a wide enough terminal. Posters are
-off by default under settings; they're block art, so temper expectations.
+real images on kitty and Ghostty, block art everywhere else. The next few rows
+below the cursor load ahead of time so they don't pop in; set how many under
+**preload ahead** in settings, or turn it off.
 
 **`S` picks subtitles** while something's playing, from any addon that
 serves them. It opens on whatever you've set as your subtitle language —
 that setting takes a list, so `eng, en, English` all count as English.
 
 **`D` downloads a stream.** One at a time, resumable, into a folder layout you
-can change in settings. Progress shows at the bottom wherever you are.
+can change in settings. Progress shows at the bottom wherever you are. On the
+downloads screen `x` stops one and `enter` picks it back up, `D` deletes it.
 
 ## Heads up
 

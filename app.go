@@ -142,6 +142,9 @@ func (a *app) Init() tea.Cmd {
 }
 
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if _, ok := msg.(tea.KeyMsg); ok {
+		lastInput.Store(time.Now().UnixNano())
+	}
 	switch m := msg.(type) {
 
 	case tea.WindowSizeMsg:
@@ -377,7 +380,7 @@ func (a *app) advanceTo(prev PlayRequest, prefix string) tea.Cmd {
 	if cur, isStreams := a.top().(*streamScreen); isStreams && cur.target.VideoID == prev.VideoID {
 		return tea.Sequence(
 			toast(prefix+t.Label),
-			replaceTop(newStreamScreenFiltered(t, cur.list.Query())),
+			replaceTop(newStreamScreenFiltered(t, cur.list.Query(), cur.chosen)),
 		)
 	}
 

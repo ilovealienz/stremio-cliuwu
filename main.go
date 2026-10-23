@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 )
@@ -84,11 +87,35 @@ func startupCmd(o launchOpts) tea.Cmd {
 	return nil
 }
 
+// lastInput is when the last key arrived, for returnMemoryWhenIdle.
+var lastInput atomic.Int64
+
+// returnMemoryWhenIdle returns freed memory to the OS a few seconds after the last key.
+func returnMemoryWhenIdle() {
+	freed := true
+	for range time.Tick(time.Second) {
+		idle := time.Since(time.Unix(0, lastInput.Load())) > 3*time.Second
+		switch {
+		case idle && !freed:
+			debug.FreeOSMemory()
+			freed = true
+		case !idle:
+			freed = false
+		}
+	}
+}
+
 func main() {
 	opts, run := parseArgs(os.Args[1:])
 	if !run {
 		return
 	}
+
+	// Collect sooner than the default; the heap is small. GOGC still wins if set.
+	if os.Getenv("GOGC") == "" {
+		debug.SetGCPercent(50)
+	}
+	go returnMemoryWhenIdle()
 
 	cfg := LoadConfig()
 	applyAccent(cfg.Accent)

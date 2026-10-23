@@ -69,7 +69,8 @@ var keyDetail = map[string]string{
 	"t|enable / disable":         "turn this addon on or off",
 	"J/K|move up / down":         "reorder — addons higher up win",
 	"J/K|scroll the panel":       "scroll the side panel",
-	"x|cancel download":          "stop this download and discard it",
+	"x|stop":                     "stop this download; enter resumes it from where it got to",
+	"D|delete":                   "delete this download and its partial file",
 	"C|clear finished":           "remove finished downloads from the list",
 	"0-9|jump":                   "type a row number to jump straight to it",
 	"b/esc|back":                 "go back a screen",
@@ -81,6 +82,7 @@ var keyDetail = map[string]string{
 	"u|open the release":         "open the new release on github",
 	"enter|default":              "go ahead with the highlighted choice",
 	"esc|cancel":                 "leave without changing anything",
+	"←/→|adjust":                 "change this setting's value",
 }
 
 // detail is the long description for a pair, or its short label.

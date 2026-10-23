@@ -88,6 +88,17 @@ func (l *listModel) Selected() int {
 	return l.view[l.cursor]
 }
 
+// After returns up to n selectable rows below the cursor, respecting the filter.
+func (l *listModel) After(n int) []int {
+	var out []int
+	for vi := l.cursor + 1; vi < len(l.view) && len(out) < n; vi++ {
+		if l.selectableAt(vi) {
+			out = append(out, l.view[vi])
+		}
+	}
+	return out
+}
+
 func (l *listModel) SelectedItem() (Item, bool) {
 	i := l.Selected()
 	if i < 0 {

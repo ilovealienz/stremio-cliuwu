@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // infoPane is the `i` panel: metadata for whatever row the cursor is on.
@@ -13,6 +15,11 @@ import (
 // Meta is fetched lazily per highlighted title rather than up front for the
 // whole catalog — a catalog page is 100 rows, and asking for all of them would
 // be 100 requests to draw one screen.
+
+// paneDwell is how long the cursor rests on an uncached row before it's fetched.
+const paneDwell = 150 * time.Millisecond
+
+type paneSettleMsg struct{ id asyncID }
 
 type metaDetailMsg struct {
 	id     asyncID
@@ -48,6 +55,15 @@ type infoPane struct {
 	kittyImg          uint32
 	kittyURL          string
 	kittyCols, kittyRows int
+
+	// The fetch waiting out paneDwell, and what to run once this row has loaded.
+	pending   tea.Cmd
+	afterLoad func()
+
+	// kittyBlock for the image above, rebuilt only when it changes.
+	kbID         uint32
+	kbCols, kbRows int
+	kb           string
 
 	// Episode mode: rendered straight from the season's video list, which
 	// GetSeriesMeta already fetched. No request, no cache, no async.
@@ -122,13 +138,23 @@ func PaneWidth(total int) int {
 func (p *infoPane) Split(total int) bool { return PaneWidth(total) > 0 }
 
 // Show loads meta for a title, if it isn't already showing.
+// metaArgs is what Show fetches, shared with preload so both hit one cache key.
+func metaArgs(m Meta) (mediaType, id, hint string) {
+	mediaType = m.Type
+	if mediaType == "" {
+		mediaType = "movie"
+	}
+	return mediaType, m.ID, m.Base
+}
+
 func (p *infoPane) Show(m Meta) tea.Cmd {
 	if !p.on || m.ID == "" {
 		return nil
 	}
-	// Same title is normally a no-op, unless the poster size has changed
-	// underneath us and the artwork needs redrawing.
-	if m.ID == p.forID && p.gen == posterGen {
+	// Same title is a no-op once loaded, unless the poster size has changed.
+	// Not before: a result delivered to another screen would leave it spinning.
+	if m.ID == p.forID && p.gen == posterGen && p.loaded {
+		p.loadedNow()
 		return nil
 	}
 	p.gen = posterGen
@@ -152,20 +178,32 @@ func (p *infoPane) Show(m Meta) tea.Cmd {
 
 	p.id = newAsyncID()
 	id := p.id
-	mediaType, metaID, hint := m.Type, m.ID, m.Base
-	if mediaType == "" {
-		mediaType = "movie"
-	}
+	mediaType, metaID, hint := metaArgs(m)
 	addons := ctx.addons
+	fetch := func() tea.Msg {
+		d, ok := GetMetaDetail(addons, mediaType, metaID, hint)
+		return metaDetailMsg{id: id, metaID: metaID, detail: d, ok: ok}
+	}
 
-	return tea.Batch(
-		drop,
-		p.busy.start("loading…"),
-		func() tea.Msg {
-			d, ok := GetMetaDetail(addons, mediaType, metaID, hint)
-			return metaDetailMsg{id: id, metaID: metaID, detail: d, ok: ok}
-		},
-	)
+	// Cached rows (revisited or preloaded) cost nothing to show, so no wait.
+	if _, cached := cacheMetaDetail.Get(mediaType + ":" + metaID); cached {
+		p.pending = nil
+		return tea.Batch(drop, p.busy.start("loading…"), fetch)
+	}
+	p.pending = fetch
+	return tea.Batch(drop, p.busy.start("loading…"), tea.Tick(paneDwell, func(time.Time) tea.Msg {
+		return paneSettleMsg{id: id}
+	}))
+}
+
+// AfterLoad sets what to run once the current row has fully loaded.
+func (p *infoPane) AfterLoad(f func()) { p.afterLoad = f }
+
+func (p *infoPane) loadedNow() {
+	if f := p.afterLoad; f != nil {
+		p.afterLoad = nil
+		f()
+	}
 }
 
 // ShowEpisode switches the panel to an episode. Everything it needs is
@@ -209,6 +247,14 @@ func (p *infoPane) ShowEpisode(show string, v Video) tea.Cmd {
 
 func (p *infoPane) Update(msg tea.Msg) tea.Cmd {
 	switch m := msg.(type) {
+	case paneSettleMsg:
+		if m.id != p.id || p.pending == nil || !p.on {
+			return nil // moved on, or closed, before the dwell was up
+		}
+		fetch := p.pending
+		p.pending = nil
+		return fetch
+
 	case metaDetailMsg:
 		if m.id != p.id {
 			return nil // a load for a row we've since moved off
@@ -216,11 +262,16 @@ func (p *infoPane) Update(msg tea.Msg) tea.Cmd {
 		p.busy.stop()
 		p.loaded = true
 		p.detail = m.detail
-		return p.loadPoster()
+		cmd := p.loadPoster()
+		if cmd == nil {
+			p.loadedNow() // no poster to wait for
+		}
+		return cmd
 
 	case posterMsg:
 		if m.id == p.posterID {
 			p.poster = m.art
+			p.loadedNow()
 		}
 		return nil
 
@@ -232,6 +283,7 @@ func (p *infoPane) Update(msg tea.Msg) tea.Cmd {
 			} else {
 				p.kittyOn = false
 			}
+			p.loadedNow()
 		}
 		return nil
 
@@ -315,18 +367,33 @@ func (p *infoPane) View() string {
 		lines = append(lines, "")
 	}
 
+	// One builder, so each line is copied once.
 	pad := strings.Repeat(" ", p.indent)
+	size := 64
+	for _, l := range lines {
+		size += len(pad) + len(l) + len(cReset) + 1
+	}
+	var b strings.Builder
+	b.Grow(size)
 	for i, l := range lines {
-		lines[i] = pad + clamp(l, p.w) + cReset
+		if i > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(pad)
+		b.WriteString(clamp(l, p.w))
+		b.WriteString(cReset)
 	}
 
 	if p.overflow {
 		shown := min(p.offset+avail, len(all))
 		marker := stHint.Render(fmt.Sprintf("%d/%d  J/K", shown, len(all)))
 		gap := max(0, p.w-lipgloss.Width(marker))
-		lines = append(lines, pad+strings.Repeat(" ", gap)+marker+cReset)
+		if len(lines) > 0 {
+			b.WriteByte('\n')
+		}
+		b.WriteString(pad + strings.Repeat(" ", gap) + marker + cReset)
 	}
-	return strings.Join(lines, "\n")
+	return b.String()
 }
 
 func (p *infoPane) render() string {
@@ -360,7 +427,7 @@ func (p *infoPane) render() string {
 		// per-line clamp in View stays a no-op — these lines must not be
 		// truncated or restyled.
 		cols := min(p.kittyCols, p.w)
-		head = append(head, lines(kittyBlock(p.kittyImg, cols, p.kittyRows))...)
+		head = append(head, lines(p.kittyGrid(cols))...)
 	} else if p.poster != "" {
 		head = append(head, lines(p.poster)...)
 	}
@@ -439,7 +506,7 @@ func (p *infoPane) renderEpisode() string {
 	// reason: it's what the rest of the pane is describing.
 	if p.kittyOn && p.kittyImg != 0 {
 		cols := min(p.kittyCols, p.w)
-		out = append(out, lines(kittyBlock(p.kittyImg, cols, p.kittyRows))...)
+		out = append(out, lines(p.kittyGrid(cols))...)
 		out = append(out, "")
 	}
 
@@ -554,25 +621,76 @@ func paneSize(total int, p *infoPane) int {
 
 // padBlock squares a block off to exactly w columns, so the divider sits where
 // the layout says rather than wherever the longest row happened to end.
-func padBlock(block string, w int) string {
-	lines := strings.Split(block, "\n")
-	for i, l := range lines {
-		l = clamp(l, w)
-		if pad := w - lipgloss.Width(l); pad > 0 {
-			l += strings.Repeat(" ", pad)
-		}
-		lines[i] = l + cReset
+// kittyGrid is kittyBlock for the current image, rebuilt only when it changes.
+func (p *infoPane) kittyGrid(cols int) string {
+	if p.kb == "" || p.kbID != p.kittyImg || p.kbCols != cols || p.kbRows != p.kittyRows {
+		p.kbID, p.kbCols, p.kbRows = p.kittyImg, cols, p.kittyRows
+		p.kb = kittyBlock(p.kittyImg, cols, p.kittyRows)
 	}
-	return strings.Join(lines, "\n")
+	return p.kb
+}
+
+// joinSide matches lipgloss.JoinHorizontal(Top, padded left, " ", divider, " ",
+// right) byte for byte, without re-measuring every line.
+func joinSide(left string, leftW, divRows int, right string) string {
+	ll := strings.Split(left, "\n")
+	rl := strings.Split(right, "\n")
+
+	leftWidest := max(0, leftW)
+	divW, divLines := 1, divRows
+	if divRows <= 0 {
+		divW, divLines = 0, 1 // an empty divider is one zero-width line
+	}
+	div := stHint.Render("│")
+
+	rw := make([]int, len(rl))
+	rightWidest := 0
+	for i, l := range rl {
+		rw[i] = ansi.StringWidth(l)
+		rightWidest = max(rightWidest, rw[i])
+	}
+
+	rows := max(len(ll), divLines, len(rl), 1)
+	spaces := strings.Repeat(" ", max(leftWidest, rightWidest, 1))
+
+	// Sized by bytes: colour codes make lines far longer than their width.
+	var b strings.Builder
+	b.Grow(len(left) + len(right) + rows*(leftWidest+rightWidest+len(div)+len(cReset)+4))
+	for i := 0; i < rows; i++ {
+		if i < len(ll) {
+			l, w := clampW(ll[i], leftW)
+			b.WriteString(l)
+			b.WriteString(spaces[:max(0, leftW-w)])
+			b.WriteString(cReset)
+		} else {
+			b.WriteString(spaces[:leftWidest])
+		}
+		b.WriteByte(' ')
+		switch {
+		case i < divRows:
+			b.WriteString(div)
+		case i >= divLines:
+			b.WriteString(spaces[:divW])
+		}
+		b.WriteByte(' ')
+		if i < len(rl) {
+			b.WriteString(rl[i])
+			b.WriteString(spaces[:rightWidest-rw[i]])
+		} else {
+			b.WriteString(spaces[:rightWidest])
+		}
+		if i < rows-1 {
+			b.WriteByte('\n')
+		}
+	}
+	return b.String()
 }
 
 func joinPane(listView string, listW int, p *infoPane) string {
 	if !p.On() || p.w <= 0 {
 		return listView
 	}
-	divider := strings.TrimRight(strings.Repeat(stHint.Render("│")+"\n", p.h), "\n")
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		padBlock(listView, listW), " ", divider, " ", p.View())
+	return joinSide(listView, listW, p.h, p.View())
 }
 
 // infoKeys handles panel scrolling for a screen. Reports whether it consumed

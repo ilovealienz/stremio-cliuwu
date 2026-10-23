@@ -352,13 +352,52 @@ func metaBasesUndeclared(addons []Addon, mediaType, id string) []string {
 
 var cacheMetaDetail = newCache[MetaDetail](30*time.Minute, 300)
 
+// metaFlight joins concurrent fetches of the same title.
+var metaFlight = struct {
+	mu    sync.Mutex
+	calls map[string]*metaCall
+}{calls: map[string]*metaCall{}}
+
+type metaCall struct {
+	done chan struct{}
+	d    MetaDetail
+	ok   bool
+}
+
 // GetMetaDetail fetches the full meta object for one title, asking whichever
 // addons declare a meta resource for that id.
 func GetMetaDetail(addons []Addon, mediaType, id, hint string) (MetaDetail, bool) {
+	return fetchMetaDetail(addons, mediaType, id, hint, true)
+}
+
+// fetchMetaDetail is GetMetaDetail with the negative cache optional; preload skips it.
+func fetchMetaDetail(addons []Addon, mediaType, id, hint string, negative bool) (MetaDetail, bool) {
 	key := mediaType + ":" + id
 	if v, ok := cacheMetaDetail.Get(key); ok {
 		return v, v.ID != ""
 	}
+
+	metaFlight.mu.Lock()
+	if c, busy := metaFlight.calls[key]; busy {
+		metaFlight.mu.Unlock()
+		<-c.done
+		return c.d, c.ok
+	}
+	c := &metaCall{done: make(chan struct{})}
+	metaFlight.calls[key] = c
+	metaFlight.mu.Unlock()
+
+	c.d, c.ok = loadMetaDetail(addons, mediaType, id, hint, negative)
+
+	metaFlight.mu.Lock()
+	delete(metaFlight.calls, key)
+	metaFlight.mu.Unlock()
+	close(c.done)
+	return c.d, c.ok
+}
+
+func loadMetaDetail(addons []Addon, mediaType, id, hint string, negative bool) (MetaDetail, bool) {
+	key := mediaType + ":" + id
 
 	// The first addon to answer wins, but cinemeta lags on new releases and
 	// returns an empty rating or runtime for them while another addon has
@@ -402,7 +441,9 @@ func GetMetaDetail(addons []Addon, mediaType, id, hint string) (MetaDetail, bool
 		return best, true
 	}
 
-	cacheMetaDetail.Set(key, MetaDetail{}) // negative cache, don't re-ask
+	if negative {
+		cacheMetaDetail.Set(key, MetaDetail{}) // don't re-ask
+	}
 	return MetaDetail{}, false
 }
 

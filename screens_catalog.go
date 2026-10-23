@@ -224,6 +224,16 @@ func (s *catalogScreen) syncInfo() tea.Cmd {
 	if i < 0 || s.moreRow(i) {
 		return nil // the load-more row has nothing to describe
 	}
+
+	var next []Meta
+	for _, j := range s.list.After(ctx.cfg.PreloadAhead) {
+		if !s.moreRow(j) {
+			next = append(next, s.metas[j])
+		}
+	}
+	w, h := s.info.w, s.info.h
+	s.info.AfterLoad(func() { preloadAhead(next, w, h) })
+
 	return s.info.Show(s.metas[i])
 }
 
@@ -497,6 +507,16 @@ func (s *searchScreen) syncInfo() tea.Cmd {
 	if i < 0 || i >= len(s.shown) {
 		return nil
 	}
+
+	var next []Meta
+	for _, j := range s.list.After(ctx.cfg.PreloadAhead) {
+		if j < len(s.shown) {
+			next = append(next, s.metas[s.shown[j]])
+		}
+	}
+	w, h := s.info.w, s.info.h
+	s.info.AfterLoad(func() { preloadAhead(next, w, h) })
+
 	return s.info.Show(s.metas[s.shown[i]])
 }
 

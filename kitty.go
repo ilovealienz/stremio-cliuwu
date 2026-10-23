@@ -247,10 +247,20 @@ const kittyMaxLive = 32
 
 // kittyRemember records a transmitted image, returning ids evicted to stay
 // under the cap. Caller holds kittyMu and emits the deletes after unlocking.
-func kittyRemember(id uint32, px int) []uint32 {
-	if _, seen := kittyLive[id]; !seen {
-		kittyOrder = append(kittyOrder, id)
+// kittyTouch moves id to the back of the eviction order. Caller holds kittyMu.
+func kittyTouch(id uint32) {
+	for i, v := range kittyOrder {
+		if v == id {
+			kittyOrder = append(kittyOrder[:i], kittyOrder[i+1:]...)
+			break
+		}
 	}
+	kittyOrder = append(kittyOrder, id)
+}
+
+func kittyRemember(id uint32, px int) []uint32 {
+	// Most recently used, so the image on screen is never the one evicted.
+	kittyTouch(id)
 	kittyLive[id] = px
 
 	var drop []uint32
@@ -418,6 +428,9 @@ func kittyLoadCmd(pid asyncID, url string, maxW, maxH int) tea.Cmd {
 
 					kittyMu.Lock()
 					resident := kittyLive[id] == kittyPixelWidth(d.W, cols)
+					if resident {
+						kittyTouch(id) // being shown counts as use
+					}
 					kittyMu.Unlock()
 
 					if resident {

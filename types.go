@@ -551,7 +551,7 @@ func (q *EpQueue) SeasonEpisodes(season int) []Video {
 // configVersion is bumped whenever a new field needs a non-zero default.
 // Without this, adding a bool to the struct silently gives every existing
 // install `false`, because encoding/json just leaves absent fields alone.
-const configVersion = 13
+const configVersion = 15
 
 type AppConfig struct {
 	Version          int    `json:"version"`
@@ -587,6 +587,9 @@ type AppConfig struct {
 
 	// Fetch the next page when the cursor reaches the load more row.
 	AutoLoadMore bool `json:"auto_load_more"`
+
+	// Rows ahead of the cursor preloaded in catalog and search; 0 is off.
+	PreloadAhead int `json:"preload_ahead"`
 	DownloadDir      string `json:"download_dir"`
 	DownloadFolders  bool   `json:"download_folders"`
 	MoviePattern     string `json:"movie_pattern"`
@@ -649,6 +652,11 @@ func (c *AppConfig) SetDefaults() bool {
 	if c.Version < 13 {
 		c.Posters = true
 		c.PosterSize = "xl"
+		changed = true
+	}
+
+	if c.Version < 15 {
+		c.PreloadAhead = 3
 		changed = true
 	}
 

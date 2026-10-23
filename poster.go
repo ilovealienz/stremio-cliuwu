@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	_ "image/gif"
@@ -364,27 +365,37 @@ func posterVariants(url string, biggest bool) []string {
 	return out
 }
 
+// posterBytes returns the encoded poster, from the cache or the network.
+func posterBytes(url string) ([]byte, bool) {
+	if raw, ok := cachePosterBytes.Get(url); ok {
+		return raw, true
+	}
+	res, err := httpClient.Get(url)
+	if err != nil {
+		return nil, false
+	}
+	defer res.Body.Close()
+
+	if res.StatusCode != http.StatusOK {
+		return nil, false
+	}
+	raw, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
+	if err != nil {
+		return nil, false
+	}
+	cachePosterBytes.Set(url, raw)
+	return raw, true
+}
+
 // posterImg fetches and decodes a poster.
 //
 // The decoded image is returned to the caller and not retained — see
 // cachePosterBytes. Repeat calls come out of the byte cache, so the cost is a
 // decode rather than a download.
 func posterImg(url string) (*image.RGBA, bool) {
-	raw, ok := cachePosterBytes.Get(url)
+	raw, ok := posterBytes(url)
 	if !ok {
-		res, err := httpClient.Get(url)
-		if err != nil {
-			return nil, false
-		}
-		defer res.Body.Close()
-
-		if res.StatusCode != http.StatusOK {
-			return nil, false
-		}
-		if raw, err = io.ReadAll(io.LimitReader(res.Body, 4<<20)); err != nil {
-			return nil, false
-		}
-		cachePosterBytes.Set(url, raw)
+		return nil, false
 	}
 
 	decoded, _, err := image.Decode(bytes.NewReader(raw))
@@ -394,6 +405,80 @@ func posterImg(url string) (*image.RGBA, bool) {
 	img := toRGBA(decoded)
 	cachePosterDims.Set(url, posterDims{W: img.Bounds().Dx(), H: img.Bounds().Dy()})
 	return img, true
+}
+
+// preload warms the next rows one at a time; each cursor move replaces the queue.
+var preload struct {
+	mu      sync.Mutex
+	queue   []preloadJob // nearest row first
+	running bool
+}
+
+type preloadJob struct {
+	mediaType, id, hint string
+	addons              []Addon
+	posters, kitty      bool
+	maxW, maxH          int
+}
+
+// preloadAhead queues rows at the pane's size. Call from Update.
+func preloadAhead(metas []Meta, paneW, paneH int) {
+	if ctx.cfg.PreloadAhead <= 0 {
+		return
+	}
+	// Everything that reads config is worked out here, not in the worker.
+	posters := ctx.cfg.Posters && paneW >= 12 // the same gate as loadPoster
+	kitty := posters && kittySupported()
+	maxW, maxH := posterBudget(ctx.cfg.PosterSize, paneW, paneH)
+
+	var queue []preloadJob
+	for _, m := range metas {
+		if m.ID == "" {
+			continue
+		}
+		mt, id, hint := metaArgs(m)
+		queue = append(queue, preloadJob{
+			mediaType: mt, id: id, hint: hint, addons: ctx.addons,
+			posters: posters, kitty: kitty, maxW: maxW, maxH: maxH,
+		})
+	}
+
+	preload.mu.Lock()
+	preload.queue = queue
+	start := !preload.running && len(queue) > 0
+	if start {
+		preload.running = true
+	}
+	preload.mu.Unlock()
+
+	if start {
+		go preloadWorker()
+	}
+}
+
+func preloadWorker() {
+	for {
+		preload.mu.Lock()
+		if len(preload.queue) == 0 {
+			preload.running = false
+			preload.mu.Unlock()
+			return
+		}
+		j := preload.queue[0]
+		preload.queue = preload.queue[1:]
+		preload.mu.Unlock()
+
+		d, ok := fetchMetaDetail(j.addons, j.mediaType, j.id, j.hint, false)
+		if !ok || !j.posters || d.Poster == "" {
+			continue
+		}
+		// Uploaded but not placed, so it stays hidden until the pane shows it.
+		if j.kitty {
+			kittyLoadCmd(0, d.Poster, j.maxW, j.maxH)()
+		} else {
+			FetchPoster(d.Poster, j.maxW, j.maxH)
+		}
+	}
 }
 
 // FetchPoster downloads and renders a poster. Safe to call from a goroutine.

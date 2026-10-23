@@ -512,7 +512,5 @@ func joinContinuePanel(menu string, menuW int, p *continuePanel) string {
 	if !p.On() || p.w <= 0 {
 		return menu
 	}
-	divider := strings.TrimRight(strings.Repeat(stHint.Render("│")+"\n", p.h), "\n")
-	return lipgloss.JoinHorizontal(lipgloss.Top,
-		padBlock(menu, menuW), " ", divider, " ", p.View())
+	return joinSide(menu, menuW, p.h, p.View())
 }

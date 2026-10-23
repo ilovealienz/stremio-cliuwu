@@ -429,6 +429,7 @@ type settingRow struct {
 	sub   string
 	badge string
 	act   func() tea.Cmd
+	step  func(dir int) tea.Cmd // left/right; nil leaves them paging the list
 }
 
 type settingsScreen struct {
@@ -456,11 +457,24 @@ func (s *settingsScreen) SetSize(w, h int) {
 
 func (s *settingsScreen) Footer() string {
 	pairs := [][2]string{{"enter", "edit / toggle"}}
+	if i := s.list.Selected(); i >= 0 && i < len(s.rows) && s.rows[i].step != nil {
+		pairs = append(pairs, [2]string{"←/→", "adjust"})
+	}
 	if s.update.State == updateAvailable {
 		pairs = append(pairs, [2]string{"u", "open the release"})
 	}
 	pairs = append(pairs, [2]string{"b/esc", "back"})
 	return keyHint(pairs...)
+}
+
+// Past this, preloading would start evicting from the 40-entry poster cache.
+const maxPreload = 10
+
+func preloadLabel(n int) string {
+	if n <= 0 {
+		return "off"
+	}
+	return strconv.Itoa(n)
 }
 
 func onOff(b bool) string {
@@ -633,6 +647,21 @@ func (s *settingsScreen) rebuild() {
 				return s.save()
 			}},
 
+		{label: "preload ahead", sub: "info and posters for the next rows · ←/→ to change",
+			badge: preloadLabel(c.PreloadAhead),
+			act: func() tea.Cmd {
+				ctx.cfg.PreloadAhead = (ctx.cfg.PreloadAhead + 1) % (maxPreload + 1)
+				return s.save()
+			},
+			step: func(dir int) tea.Cmd {
+				n := min(max(ctx.cfg.PreloadAhead+dir, 0), maxPreload)
+				if n == ctx.cfg.PreloadAhead {
+					return nil
+				}
+				ctx.cfg.PreloadAhead = n
+				return s.save()
+			}},
+
 		{label: "poster quality", sub: "kitty only, half-blocks always use small",
 			badge: orDash(c.PosterQuality), act: func() tea.Cmd {
 				ctx.cfg.PosterQuality = nextPosterQuality(ctx.cfg.PosterQuality)
@@ -692,6 +721,17 @@ func (s *settingsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 	}
 
 	if k, ok := msg.(tea.KeyMsg); ok {
+		// Before the list, which pages on left/right. Not while typing a filter.
+		if key := k.String(); !s.list.Typing() && (key == "left" || key == "right") {
+			if i := s.list.Selected(); i >= 0 && i < len(s.rows) && s.rows[i].step != nil {
+				dir := 1
+				if key == "left" {
+					dir = -1
+				}
+				return s, s.rows[i].step(dir)
+			}
+		}
+
 		if consumed, cmd := s.list.Update(msg); consumed {
 			return s, cmd
 		}

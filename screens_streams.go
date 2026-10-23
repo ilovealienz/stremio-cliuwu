@@ -39,6 +39,9 @@ type streamScreen struct {
 	// whatever you'd narrowed the list down to.
 	filter string
 
+	// The addon tab picked, by name. Only tab changes it.
+	chosen string
+
 	// Hidden by the block list, and whether you've asked to see them anyway.
 	blocked     int
 	showBlocked bool
@@ -54,9 +57,10 @@ type streamScreen struct {
 // Autoplay builds a fresh screen for the next episode, which dropped whatever
 // you were filtering by — so having narrowed forty results down to one release
 // group, you'd get all forty again on the next episode.
-func newStreamScreenFiltered(t streamTarget, filter string) *streamScreen {
+func newStreamScreenFiltered(t streamTarget, filter, chosen string) *streamScreen {
 	s := newStreamScreen(t)
 	s.filter = filter
+	s.chosen = chosen
 	return s
 }
 
@@ -220,8 +224,14 @@ func (s *streamScreen) collectProviders() {
 		seen[st.Addon] = true
 		s.providers = append(s.providers, st.Addon)
 	}
-	if s.provIdx >= len(s.providers) {
-		s.provIdx = 0
+
+	// By name, since tab order changes; "all" if that addon returned nothing.
+	s.provIdx = 0
+	for i, p := range s.providers {
+		if i > 0 && p == s.chosen {
+			s.provIdx = i
+			break
+		}
 	}
 }
 
@@ -495,11 +505,13 @@ func (s *streamScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "tab":
 			if len(s.providers) > 1 {
 				s.provIdx = (s.provIdx + 1) % len(s.providers)
+				s.chosen = s.providerFilter()
 				s.rebuild()
 			}
 		case "shift+tab":
 			if len(s.providers) > 1 {
 				s.provIdx = (s.provIdx - 1 + len(s.providers)) % len(s.providers)
+				s.chosen = s.providerFilter()
 				s.rebuild()
 			}
 		case "B":
