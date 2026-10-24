@@ -148,7 +148,8 @@ func main() {
 	model := newApp(newMenuScreen())
 	model.setStartup(startupCmd(opts))
 
-	prog := tea.NewProgram(model, tea.WithAltScreen())
+	// 30fps keeps up with key repeat and halves idle wake-ups.
+	prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithFPS(30))
 	ctx.prog = prog
 	player.Attach(prog)
 	downloader.Attach(prog)

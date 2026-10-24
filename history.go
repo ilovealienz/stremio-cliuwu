@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -269,10 +270,10 @@ func FlushHistory() { hist.Flush() }
 
 var (
 	inProgressCache *ContinueItem
-	inProgressValid bool
+	inProgressValid atomic.Bool // cleared from the UI without hist.mu
 )
 
-func invalidateInProgress() { inProgressValid = false }
+func invalidateInProgress() { inProgressValid.Store(false) }
 
 // ── Episode state ─────────────────────────────────────────────────────────────
 
@@ -708,13 +709,13 @@ func ContinueTarget() *ContinueItem {
 	defer hist.mu.Unlock()
 	hist.load()
 
-	if inProgressValid {
+	if inProgressValid.Load() {
 		return inProgressCache
 	}
 	items := hist.recentEntries().Items
 
 	inProgressCache = nil
-	inProgressValid = true
+	inProgressValid.Store(true)
 	if len(items) == 0 {
 		return nil
 	}
