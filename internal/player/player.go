@@ -145,9 +145,12 @@ type PlayRequest struct {
 
 	// How the stream was picked, so autoplay can pick the next one the same way.
 	BingeGroup string
-	Release    string // file or release name
-	Filter     string // the stream list's filter text
-	AddonTab   string // the addon tab, "" for all
+	Release    string   // file or release name
+	Langs      []string // audio languages the addon flagged, besides English
+	Addon      string   // the addon the stream came from
+	Size       int64    // the stream's size in bytes, 0 if unknown
+	Filter     string   // the stream list's filter text
+	AddonTab   string   // the addon tab, "" for all
 }
 
 // ── Player ────────────────────────────────────────────────────────────────────

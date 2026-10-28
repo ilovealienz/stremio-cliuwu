@@ -369,6 +369,9 @@ func playRequest(t store.StreamTarget, st stremio.Stream, resume float64) player
 
 		BingeGroup: st.BehaviorHints.BingeGroup,
 		Release:    stremio.ReleaseName(st),
+		Langs:      stremio.FlagLangs(st.Name + "\n" + st.Title + "\n" + st.Description),
+		Addon:      st.Addon,
+		Size:       stremio.StreamBytes(st),
 	}
 }
 

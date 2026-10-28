@@ -124,8 +124,7 @@ selecting something you've partly watched asks whether to resume or start over.
 
 **Next episode loads itself.** Near the end of an episode it fetches the next
 one's streams and puts them on screen, so when the current one ends you just
-pick and go. With **autoplay** on (`a` on a stream list) it picks the closest
-match to what you were watching and plays it, up to the end of the season.
+pick and go. Or let [autoplay](#autoplay) pick for you.
 
 **Watched isn't a flat percentage.** A ten minute cartoon and a two hour film
 shouldn't need the same fraction watched to count as finished, so the
@@ -144,6 +143,17 @@ that setting takes a list, so `eng, en, English` all count as English.
 **`D` downloads a stream.** One at a time, resumable, into a folder layout you
 can change in settings. Progress shows at the bottom wherever you are. On the
 downloads screen `x` stops one and `enter` picks it back up, `D` deletes it.
+
+## Autoplay
+
+Press `a` on an episode's stream list to turn it on. It's meant to be used with
+your own filter: press `/` and narrow the list to what you want, like a release
+group, `2160p` or `dual`, then pick a stream. The filter and the addon tab
+carry over to the next episode, and autoplay plays the closest match there: the
+same language and audio, then the same quality and group where it can.
+
+It stops at the end of a season, and if nothing in the filtered list fits, it
+opens the list for you to choose.
 
 ## Heads up
 

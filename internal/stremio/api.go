@@ -63,7 +63,7 @@ func GetJSONTimeout(u string, out any, timeout time.Duration) error {
 
 	r, err := HTTPClient.Do(req)
 	if err != nil {
-		return err
+		return CleanErr(err)
 	}
 	defer r.Body.Close()
 	if r.StatusCode >= 400 {

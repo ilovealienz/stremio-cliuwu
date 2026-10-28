@@ -130,6 +130,12 @@ func TestManifestURLs(t *testing.T) {
 		"https://torrentio.strem.fun/realdebrid=ABCDEFGHIJ/manifest.json",
 		"https://x.example/a=short/b=1234567/manifest.json",
 		"https://x.example/manifest.json", "::bad",
+		"https://comet.example/eyJkZWJyaWRBcGlLZXkiOiJzZWNyZXQifQ==/manifest.json",
+		"https://aio.example/stremio/0f5b6a2e-1111-2222-3333-444455556666/c2VjcmV0c2VjcmV0c2VjcmV0/manifest.json",
+		"https://x.example/manifest.json?apikey=secret123",
+		"https://x.example/abcdefghij0123456789/manifest.json",
+		"https://x.example/stremio/v1",
+		"https://user:pass@x.example/manifest.json#token=abc",
 	} {
 		out = append(out, fmt.Sprintf("redact(%q)=%q", s, RedactURL(s)))
 	}

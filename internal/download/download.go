@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -751,6 +752,10 @@ func (d *Downloader) fetch(dl *Download) error {
 
 	res, err := downloadClient.Do(req)
 	if err != nil {
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			return ue.Err // the URL can carry a debrid key
+		}
 		return err
 	}
 	defer res.Body.Close()

@@ -3,6 +3,7 @@ package stremio
 import (
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 )
@@ -55,6 +56,29 @@ func ExtractSize(s string) string {
 		return ""
 	}
 	return m[1] + " " + strings.ToUpper(m[2])
+}
+
+// StreamBytes is the stream's size in bytes, from behaviorHints or the size
+// shown in its text, or 0 when it doesn't say.
+func StreamBytes(s Stream) int64 {
+	if s.BehaviorHints.VideoSize > 0 {
+		return s.BehaviorHints.VideoSize
+	}
+	for _, hay := range []string{s.Description, s.Title, s.Name} {
+		m := SizeRe.FindStringSubmatch(hay)
+		if m == nil {
+			continue
+		}
+		f, err := strconv.ParseFloat(m[1], 64)
+		if err != nil {
+			continue
+		}
+		if strings.HasPrefix(strings.ToUpper(m[2]), "G") {
+			return int64(f * (1 << 30))
+		}
+		return int64(f * (1 << 20))
+	}
+	return 0
 }
 
 // cachedMarkers are how the common debrid addons signal instant availability.

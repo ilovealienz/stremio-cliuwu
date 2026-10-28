@@ -1,6 +1,7 @@
 package stremio
 
 import (
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -72,21 +73,45 @@ func addonBase(a Addon) string {
 func RedactURL(raw string) string {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return raw
+		return "(unreadable url)" // the parse error would repeat it
 	}
+	u.User, u.Fragment = nil, ""
 	segs := strings.Split(u.Path, "/")
 	for i, seg := range segs {
-		if j := strings.Index(seg, "="); j > 0 {
-			key := seg[:j]
-			val := seg[j+1:]
-			if len(val) > 6 {
-				val = val[:3] + "…" + val[len(val)-2:]
-			}
-			segs[i] = key + "=" + val
+		if j := strings.Index(seg, "="); j > 0 && j <= 20 {
+			segs[i] = seg[:j+1] + shorten(seg[j+1:])
+		} else if len(seg) > 16 {
+			segs[i] = shorten(seg) // encoded config, as AIOStreams and Comet use
 		}
 	}
 	u.Path = strings.Join(segs, "/")
-	return u.String()
+	u.RawQuery = ""
+	out := u.String()
+	if strings.Contains(raw, "?") {
+		out += "?…"
+	}
+	return strings.ReplaceAll(out, "%E2%80%A6", "…")
+}
+
+func shorten(s string) string {
+	if len(s) > 6 {
+		return s[:3] + "…" + s[len(s)-2:]
+	}
+	return s
+}
+
+// CleanErr drops the request URL from a transport error, keeping the host,
+// since addon URLs can carry an API key.
+func CleanErr(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		if u, perr := url.Parse(ue.URL); perr == nil && u.Host != "" &&
+			!strings.Contains(ue.Err.Error(), u.Hostname()) {
+			return fmt.Errorf("%s: %w", u.Host, ue.Err)
+		}
+		return ue.Err
+	}
+	return err
 }
 
 // ── Fetching ──────────────────────────────────────────────────────────────────
@@ -102,7 +127,7 @@ func FetchAddon(manifestURL string) Addon {
 		return a
 	}
 	if a.Manifest.Name == "" {
-		a.Manifest.Name = manifestURL
+		a.Manifest.Name = addonLabel(a)
 	}
 	return a
 }

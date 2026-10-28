@@ -112,8 +112,9 @@ type epRef struct {
 }
 
 type historyStore struct {
-	mu   sync.Mutex
-	data historyFile
+	mu      sync.Mutex
+	writeMu sync.Mutex // so the exit flush waits for a timed one mid-write
+	data    historyFile
 
 	byVideo map[string]epRef
 	loaded  bool
@@ -237,6 +238,8 @@ func (h *historyStore) touch() {
 
 // Flush writes the store out if anything changed.
 func (h *historyStore) Flush() {
+	h.writeMu.Lock()
+	defer h.writeMu.Unlock()
 	h.mu.Lock()
 	h.pending = false
 	if !h.dirty || !h.loaded {
@@ -734,9 +737,6 @@ func ContinueTarget() *ContinueItem {
 		return inProgressCache
 	}
 
-	// The next episode is derived from what's recorded for the show, rather
-	// than stored on the entry: keeping next-up fields per episode meant
-	// rewriting them for every episode of a bulk-marked season.
 	// The next episode is whatever was recorded when this one played, not
 	// Episode+1. An empty pointer means the queue had nothing after it — end
 	// of the series, or a season we've no list for — so there's nothing to

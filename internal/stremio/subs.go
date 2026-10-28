@@ -115,12 +115,17 @@ func (q SubsQuery) path(withHints bool) string {
 	return base + "/" + strings.Join(extra, "&") + ".json"
 }
 
+// SubsKey is the cache key for a subtitle query.
+func SubsKey(q SubsQuery) string {
+	return q.MediaType + ":" + q.VideoID + ":" + q.Hash + ":" + q.Filename
+}
+
 func GetSubtitles(addons []Addon, q SubsQuery, lang string) []Subtitle {
 	videoID, mediaType := q.VideoID, q.MediaType
 	if videoID == "" {
 		return nil
 	}
-	key := mediaType + ":" + videoID + ":" + q.Hash + ":" + q.Filename
+	key := SubsKey(q)
 	if v, ok := CacheSubs.Get(key); ok {
 		return v
 	}
@@ -137,7 +142,7 @@ func GetSubtitles(addons []Addon, q SubsQuery, lang string) []Subtitle {
 		go func(i int, a Addon) {
 			defer wg.Done()
 
-			base := strings.TrimSuffix(a.TransportURL, "/manifest.json")
+			base := addonBase(a)
 
 			var found []Subtitle
 			for _, p := range q.paths() {

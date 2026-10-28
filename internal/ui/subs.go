@@ -244,7 +244,7 @@ func (s *subsScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			)
 
 		case "R":
-			stremio.CacheSubs.Delete(s.query.MediaType + ":" + s.query.VideoID + ":" + s.query.Hash)
+			stremio.CacheSubs.Delete(stremio.SubsKey(s.query))
 			s.loaded = false
 			s.id = poster.NewAsyncID()
 			return s, s.Init()

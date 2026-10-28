@@ -198,3 +198,24 @@ func TestStreams404IsNotAFailure(t *testing.T) {
 		t.Fatalf("404 not cached: %d hits", f.count("missing.test"))
 	}
 }
+
+func gib(f float64) int64 { return int64(f * (1 << 30)) }
+
+func TestStreamBytes(t *testing.T) {
+	hinted := Stream{Title: "💾 9 GB"}
+	hinted.BehaviorHints.VideoSize = 1234
+	for _, c := range []struct {
+		st   Stream
+		want int64
+	}{
+		{Stream{Title: "Show.mkv\n👤 50 💾 1.44 GB ⚙️ TPB"}, gib(1.44)},
+		{Stream{Description: "Show\n843.5 MB"}, int64(843.5 * float64(1<<20))},
+		{Stream{Description: "💾 2.1 GiB"}, gib(2.1)},
+		{hinted, 1234},
+		{Stream{Title: "no size here 1080p"}, 0},
+	} {
+		if got := StreamBytes(c.st); got != c.want {
+			t.Errorf("%q: got %d, want %d", c.st.Title+c.st.Description, got, c.want)
+		}
+	}
+}

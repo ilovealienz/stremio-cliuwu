@@ -85,7 +85,7 @@ func TestToggleAutoplay(t *testing.T) {
 	if ctx.player.Queued() == nil {
 		t.Fatal("turning autoplay off removed a hand-queued stream")
 	}
-	if cmd := (&app{}).autoPicked(autoPickMsg{streams: []stremio.Stream{{URL: "http://x/a"}}}); cmd != nil {
+	if cmd := (&app{}).autoPicked(autoPickMsg{pick: stremio.Stream{URL: "http://x/a"}, ok: true}); cmd != nil {
 		t.Fatal("a pick that landed after turning autoplay off still did something")
 	}
 }
@@ -251,5 +251,124 @@ func TestPlayerBarAfterErrorClip(t *testing.T) {
 	a.pstate.ErrorClip = false
 	if !strings.Contains(stripANSI(a.playerBar()), "00:30") {
 		t.Fatal("normal file lost its progress")
+	}
+}
+
+func TestPickStreamKeepsLanguage(t *testing.T) {
+	mk := func(name, title string) stremio.Stream {
+		st := stream("Torrentio", name, "")
+		st.Title = title
+		st.URL = "http://x/" + name
+		return st
+	}
+	ita := mk("ita", "Show.S01E06.1080p.WEB.h264-GRP\n👤 40 💾 1.2 GB\n🇮🇹")
+	eng := mk("eng", "Show.S01E06.1080p.WEB.h264-GRP\n👤 90 💾 1.2 GB")
+	prev := player.PlayRequest{Release: "Show.S01E05.1080p.WEB.h264-GRP"}
+
+	if st, _ := pickStream([]stremio.Stream{ita, eng}, prev, store.Config{}); st.Name != "eng" {
+		t.Fatalf("picked %q after an english episode", st.Name)
+	}
+	if st, ok := pickStream([]stremio.Stream{ita}, prev, store.Config{}); ok {
+		t.Fatalf("autoplayed a dub in another language: %q", st.Name)
+	}
+	prev.Langs = []string{"it"} // watching the italian one
+	if st, _ := pickStream([]stremio.Stream{eng, ita}, prev, store.Config{}); st.Name != "ita" {
+		t.Fatalf("picked %q after an italian episode", st.Name)
+	}
+}
+
+func TestPickStreamLooksPastWrongVariantGroup(t *testing.T) {
+	ad := stream("A", "1080p", "aio|1080p|kitsune")
+	ad.BehaviorHints.Filename = "Show S01E06 with Audio Description 1080p AMZN WEB-DL DDP5 1 H 264-Kitsune.mkv"
+	plain := stream("B", "1080p", "other|1080p")
+	plain.URL = "http://x/plain"
+	plain.BehaviorHints.Filename = "Show S01E06 1080p AMZN WEB-DL DDP5 1 H 264-Kitsune.mkv"
+	prev := player.PlayRequest{
+		BingeGroup: "aio|1080p|kitsune",
+		Release:    "Show S01E05 1080p AMZN WEB-DL DDP5 1 H 264-Kitsune.mkv",
+	}
+	st, ok := pickStream([]stremio.Stream{ad, plain}, prev, store.Config{})
+	if !ok || st.URL != plain.URL {
+		t.Fatalf("ok=%v picked %q", ok, st.BehaviorHints.Filename)
+	}
+}
+
+func TestPickStreamTiebreaks(t *testing.T) {
+	mk := func(addon, name, size string) stremio.Stream {
+		st := stream(addon, name, "")
+		st.URL = "http://x/" + name
+		st.Title = "Show.S01E06.1080p.WEB.h264-GRP\n👤 9 💾 " + size
+		return st
+	}
+	prev := player.PlayRequest{Release: "Show.S01E05.1080p.WEB.h264-GRP", Addon: "Torrentio", Size: 1200 << 20}
+
+	if st, _ := pickStream([]stremio.Stream{mk("Comet", "other", "1.2 GB"), mk("Torrentio", "same", "1.2 GB")}, prev, store.Config{}); st.Name != "same" {
+		t.Fatalf("same addon should win a tie, got %q", st.Name)
+	}
+	prev.Addon = ""
+	if st, _ := pickStream([]stremio.Stream{mk("A", "big", "4.5 GB"), mk("A", "near", "1.3 GB")}, prev, store.Config{}); st.Name != "near" {
+		t.Fatalf("nearer size should win a tie, got %q", st.Name)
+	}
+	if st, _ := pickStream([]stremio.Stream{mk("A", "first", "1.25 GB"), mk("A", "second", "1.18 GB")}, prev, store.Config{}); st.Name != "first" {
+		t.Fatalf("a small size difference shouldn't override list order, got %q", st.Name)
+	}
+	if st, _ := pickStream([]stremio.Stream{mk("A", "unknown", ""), mk("A", "known", "1.1 GB")}, prev, store.Config{}); st.Name != "known" {
+		t.Fatalf("a known nearby size should beat an unknown one, got %q", st.Name)
+	}
+	// A better match still beats a closer size.
+	far := mk("A", "far", "4.5 GB")
+	worse := mk("A", "worse", "1.2 GB")
+	worse.Title = "Show.S01E06.720p.WEB.h264-GRP\n💾 1.2 GB"
+	if st, _ := pickStream([]stremio.Stream{worse, far}, prev, store.Config{}); st.Name != "far" {
+		t.Fatalf("size overrode resolution, got %q", st.Name)
+	}
+}
+
+func TestPickStreamKeepsDualAudio(t *testing.T) {
+	file := func(name string) stremio.Stream {
+		st := stream("A", "1080p", "")
+		st.URL = "http://x/" + name
+		st.BehaviorHints.Filename = name
+		return st
+	}
+	subOnly := []stremio.Stream{
+		file("[SubsPlease] Show - 06 (1080p) [A1B2C3D4].mkv"),
+		file("[Erai-raws] Show - 06 [1080p][Multiple Subtitle][ENG][POR-BR][SPA-LA][FRE][GER][ITA].mkv"),
+		file("Show S01E06 1080p CR WEB-DL AAC2.0 H 264-VARYG.mkv"),
+		file("Show (English Dub) - 06 [1080p].mkv"),
+	}
+	duals := []string{
+		"[Judas] Show - S01E05 [1080p][HEVC x265 10bit][Dual-Audio][Multi-Subs].mkv",
+		"[DB] Show - 05 [Dual Audio 10bit 1080p][HEVC-x265].mkv",
+		"[EMBER] Show S01E05 [1080p] [Dual Audio HEVC WEBRip DDP].mkv",
+		"Show S01E05 1080p CR WEB-DL DUAL AAC2.0 H 264-VARYG.mkv",
+		"Show S01E05 1080p WEB-DL [ENG+JPN] [Multi-Sub].mkv",
+		"Show S01E05 1080p WEB-DL [JPN-ENG].mkv",
+		"Show.S01E05.MULTi.1080p.WEB.H264-GRP.mkv",
+	}
+	for _, prevName := range duals {
+		for _, next := range duals {
+			// The dual release for the next episode, from whichever group, at the bottom.
+			want := file(strings.Replace(strings.Replace(next, "S01E05", "S01E06", 1), " - 05", " - 06", 1))
+			streams := append(append([]stremio.Stream{}, subOnly...), want)
+			st, ok := pickStream(streams, player.PlayRequest{Release: prevName}, store.Config{})
+			if !ok || st.URL != want.URL {
+				t.Errorf("after %q\n  wanted %q\n  got    %q (ok=%v)", prevName, want.BehaviorHints.Filename, st.BehaviorHints.Filename, ok)
+			}
+		}
+		// With no dual release for the next episode, it stops rather than play a sub-only one.
+		if st, ok := pickStream(subOnly, player.PlayRequest{Release: prevName}, store.Config{}); ok {
+			t.Errorf("after %q autoplayed sub-only %q", prevName, st.BehaviorHints.Filename)
+		}
+	}
+
+	// The other way round: after a sub-only episode, dual audio and dubs are skipped.
+	sub := file("[SubsPlease] Show - 06 (1080p) [A1B2C3D4].mkv")
+	for _, d := range duals {
+		dual := file(strings.Replace(strings.Replace(d, "S01E05", "S01E06", 1), " - 05", " - 06", 1))
+		streams := []stremio.Stream{dual, file("Show (English Dub) - 06 [1080p].mkv"), sub}
+		if st, _ := pickStream(streams, player.PlayRequest{Release: "[SubsPlease] Show - 05 (1080p) [9F8E7D6C].mkv"}, store.Config{}); st.URL != sub.URL {
+			t.Errorf("after sub-only, picked %q over the sub-only release", st.BehaviorHints.Filename)
+		}
 	}
 }

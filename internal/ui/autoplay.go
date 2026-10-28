@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"math"
 	"strings"
 	"time"
 
@@ -11,11 +12,13 @@ import (
 	"stremio-cliuwu/internal/stremio"
 )
 
-// autoPickMsg carries the next episode's streams for autoplay to choose from.
+// autoPickMsg carries autoplay's pick for the next episode, made off the UI
+// loop: reading every release name takes a while on a long list.
 type autoPickMsg struct {
-	prev    player.PlayRequest
-	target  store.StreamTarget
-	streams []stremio.Stream
+	prev   player.PlayRequest
+	target store.StreamTarget
+	pick   stremio.Stream
+	ok     bool
 }
 
 // autoFetch loads the streams for the episode after prev, retrying like the
@@ -29,6 +32,7 @@ func autoFetch(prev player.PlayRequest, patient bool) tea.Cmd {
 		return nil
 	}
 	addons := ctx.StreamAddons()
+	cfg := *ctx.cfg
 	return func() tea.Msg {
 		streams, failed := stremio.GetStreams(addons, t.MediaType, t.FetchID())
 		for _, d := range streamRetryDelays {
@@ -38,7 +42,8 @@ func autoFetch(prev player.PlayRequest, patient bool) tea.Cmd {
 			time.Sleep(d)
 			streams, failed = stremio.RetryStreams(addons, t.MediaType, t.FetchID())
 		}
-		return autoPickMsg{prev: prev, target: t, streams: streams}
+		st, ok := pickStream(streams, prev, cfg)
+		return autoPickMsg{prev: prev, target: t, pick: st, ok: ok}
 	}
 }
 
@@ -56,12 +61,14 @@ func hasPlayable(streams []stremio.Stream) bool {
 // nothing means no pick, so the list opens.
 //
 // The rest follows Sonarr: candidates are the streams sharing prev's
-// bingeGroup, or with no group match the ones at least as cached as the top
-// stream.
-// They're compared field by field in order (variant, resolution, HDR, group,
-// source and service, codec, audio) and the first difference decides; a tie
-// keeps list order. A different variant, like audio description or a dub,
-// is never autoplayed.
+// bingeGroup, then the ones at least as cached as the top stream.
+// Releases that name another episode, or are a special or a batch when prev
+// wasn't, are dropped. The rest are compared field by field in order
+// (variant and language, the same show, the same title words, resolution,
+// HDR, group, source and service, codec, audio) and the first difference
+// decides. A tie goes to the same addon, then the most alike name, then the
+// nearer size, then list order. A different variant, like audio description, a dub or another
+// language, is never autoplayed.
 func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Config) (stremio.Stream, bool) {
 	var cands []stremio.Stream
 	for _, st := range streams {
@@ -88,43 +95,102 @@ func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Con
 			return strings.Contains(strings.ToLower(stripANSI(FmtStream(st))), q)
 		})
 	}
+	// Addons sometimes answer with other episodes: another week of a daily
+	// show, or a mislabelled file. A name that says which episode it is
+	// has to say this one.
+	if nq, ok := prev.Queue.Step(1); ok {
+		v := nq.Episodes[nq.Index]
+		aired, _ := time.Parse(time.RFC3339, v.Released)
+		extra := stremio.Extra(prev.Release)
+		keep(func(st stremio.Stream) bool {
+			name := stremio.ReleaseName(st)
+			return !otherEpisode(name, v, aired) && (extra || !stremio.Extra(name))
+		})
+	}
 	if len(cands) == 0 {
 		return stremio.Stream{}, false
 	}
 
-	var pool []stremio.Stream
+	var group []stremio.Stream
 	if g := prev.BingeGroup; g != "" {
 		for _, st := range cands {
 			if st.BehaviorHints.BingeGroup == g {
-				pool = append(pool, st)
+				group = append(group, st)
 			}
 		}
 	}
-	if len(pool) == 0 {
-		top := stremio.StreamCached(cands[0])
-		keep(func(st stremio.Stream) bool { return stremio.StreamCached(st) >= top })
-		pool = cands
-	}
+	top := stremio.StreamCached(cands[0])
+	keep(func(st stremio.Stream) bool { return stremio.StreamCached(st) >= top })
 	if prev.Release == "" {
-		return pool[0], true
+		if len(group) > 0 {
+			return group[0], true
+		}
+		return cands[0], true
 	}
 
 	// Episode titles are part of release names; they mustn't read as tags.
-	nextTitle := epTitle(prev.Queue, 1)
-	parse := func(st stremio.Stream) stremio.ReleaseInfo {
-		return stremio.ParseReleaseNameTitled(stremio.ReleaseName(st), nextTitle)
-	}
-	want := stremio.ParseReleaseNameTitled(prev.Release, epTitle(prev.Queue, 0))
-	best, bestKey := pool[0], want.Matches(parse(pool[0]))
-	for _, st := range pool[1:] {
-		if k := want.Matches(parse(st)); better(k, bestKey) {
-			best, bestKey = st, k
+	show, original := "", ""
+	if prev.Queue != nil {
+		show = prev.Queue.Show.Name
+		if prev.Queue.Show.Source == "anime" {
+			original = "jp" // Japanese audio is the original, tagged or not
 		}
 	}
-	if !bestKey[0] {
-		return stremio.Stream{}, false // only a different variant is left
+	nextTitle := epTitle(prev.Queue, 1)
+	parsed := map[string]stremio.ReleaseInfo{} // each stream is read once, by URL
+	parse := func(st stremio.Stream) stremio.ReleaseInfo {
+		if r, ok := parsed[st.URL]; ok {
+			return r
+		}
+		r := stremio.ParseReleaseNameTitled(stremio.ReleaseName(st), show, nextTitle).
+			WithLangs(stremio.FlagLangs(st.Name + "\n" + st.Title + "\n" + st.Description)).Original(original)
+		parsed[st.URL] = r
+		return r
 	}
-	return best, true
+	want := stremio.ParseReleaseNameTitled(prev.Release, show, epTitle(prev.Queue, 0)).WithLangs(prev.Langs).Original(original)
+	shape := stremio.NameShape(prev.Release, show, epTitle(prev.Queue, 0))
+	alike := map[string]float64{}
+	likeness := func(st stremio.Stream) float64 {
+		if l, ok := alike[st.URL]; ok {
+			return l
+		}
+		l := stremio.ShapeLikeness(shape, stremio.NameShape(stremio.ReleaseName(st), show, nextTitle))
+		alike[st.URL] = l
+		return l
+	}
+	// The show as the last release named it, or as the metadata does: Torrentio
+	// mixes in other shows' releases from the same group.
+	title, showTitle := stremio.TitleWords(prev.Release, epTitle(prev.Queue, 0)), stremio.TitleWords(show)
+	keys := map[string][10]bool{}
+	key := func(st stremio.Stream) [10]bool {
+		if k, ok := keys[st.URL]; ok {
+			return k
+		}
+		m := want.Matches(parse(st))
+		t := stremio.TitleWords(stremio.ReleaseName(st), nextTitle)
+		same := stremio.SameTitle(title, t) || stremio.SameTitle(showTitle, t)
+		k := [10]bool{m[0], same, stremio.EqualTitle(title, t), m[1], m[2], m[3], m[4], m[5], m[6], m[7]}
+		keys[st.URL] = k
+		return k
+	}
+	pick := func(pool []stremio.Stream) (stremio.Stream, bool) {
+		best, bestKey := pool[0], key(pool[0])
+		for _, st := range pool[1:] {
+			if k := key(st); better(k, bestKey) || k == bestKey && closer(st, best, prev, likeness) {
+				best, bestKey = st, k
+			}
+		}
+		return best, bestKey[0] // false: only a different variant is left
+	}
+
+	// The same binge group first. If that only has a different variant, the
+	// rest of the list may still have the right one.
+	if len(group) > 0 {
+		if st, ok := pick(group); ok {
+			return st, true
+		}
+	}
+	return pick(cands)
 }
 
 // epTitle is the title of the episode delta away in q, or "".
@@ -135,8 +201,47 @@ func epTitle(q *stremio.EpQueue, delta int) string {
 	return ""
 }
 
+// closer breaks a tie between two streams that match prev equally well: the
+// same addon as last time, as Stremio only binge-plays within one, then the
+// name shaped most like the last one, then the nearer size. Otherwise list
+// order stands.
+func closer(a, b stremio.Stream, prev player.PlayRequest, likeness func(stremio.Stream) float64) bool {
+	if prev.Addon != "" && (a.Addon == prev.Addon) != (b.Addon == prev.Addon) {
+		return a.Addon == prev.Addon
+	}
+	if la, lb := likeness(a), likeness(b); la != lb {
+		return la > lb
+	}
+	return sizeStep(stremio.StreamBytes(a), prev.Size) < sizeStep(stremio.StreamBytes(b), prev.Size)
+}
+
+// sizeStep is how many 1.5x steps (AIOStreams' size buckets) n is from
+// want, so small differences don't override list order. Unknown sizes come
+// last; with nothing to compare to, it's a tie.
+func sizeStep(n, want int64) int {
+	if want <= 0 {
+		return 0
+	}
+	if n <= 0 {
+		return math.MaxInt
+	}
+	return int(math.Abs(math.Round(math.Log(float64(n)/float64(want)) / math.Log(1.5))))
+}
+
+// otherEpisode reports whether a release name says it's a different episode
+// from v: another number in the same season, or a date days off its airing.
+func otherEpisode(name string, v stremio.Video, aired time.Time) bool {
+	if s, first, last, ok := stremio.NameEpisode(name); ok && s == v.Season && (v.Episode < first || v.Episode > last) {
+		return true
+	}
+	if d, ok := stremio.NameDate(name); ok && !aired.IsZero() {
+		return d.Sub(aired).Abs() > 3*24*time.Hour
+	}
+	return false
+}
+
 // better compares two match lists in order; the first difference decides.
-func better(a, b [8]bool) bool {
+func better(a, b [10]bool) bool {
 	for i := range a {
 		if a[i] != b[i] {
 			return a[i]
@@ -150,11 +255,10 @@ func (a *app) autoPicked(m autoPickMsg) tea.Cmd {
 	if !ctx.cfg.Autoplay {
 		return nil // turned off while the streams loaded
 	}
-	st, ok := pickStream(m.streams, m.prev, *ctx.cfg)
-	if !ok {
+	if !m.ok {
 		return a.advanceTo(m.prev, "next up — ")
 	}
-	req := playRequest(m.target, st, 0)
+	req := playRequest(m.target, m.pick, 0)
 	req.Filter, req.AddonTab = m.prev.Filter, m.prev.AddonTab
 
 	queued, started := ctx.player.QueueAuto(req, m.prev.VideoID)

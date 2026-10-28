@@ -54,17 +54,18 @@ func TestAutoFetchPatientRetriesFailedAddons(t *testing.T) {
 		{ID: "tt9:1:2", Season: 1, Episode: 2, Released: aired},
 	}}}
 
+	// The flaky addon comes first in addon order, so it's picked once it answers.
 	for _, c := range []struct {
 		patient bool
-		want    int
-	}{{false, 1}, {true, 2}} {
+		want    string
+	}{{false, "good.test"}, {true, "flaky.test"}} {
 		stremio.ClearStreams()
 		stremio.HTTPClient.Transport = &onceDown{}
 		ctx = &appCtx{cfg: &store.Config{}, player: player.New(store.Config{}),
 			addons: []stremio.Addon{addon("flaky.test"), addon("good.test")}}
 		m := autoFetch(prev, c.patient)().(autoPickMsg)
-		if len(m.streams) != c.want {
-			t.Errorf("patient=%v: %d streams, want %d", c.patient, len(m.streams), c.want)
+		if !m.ok || m.pick.Addon != c.want {
+			t.Errorf("patient=%v: picked %q from %q, want %q", c.patient, m.pick.Name, m.pick.Addon, c.want)
 		}
 	}
 }
