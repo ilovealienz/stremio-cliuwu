@@ -1,0 +1,23 @@
+[
+  "fmtRating(\"7.123\")=\"7.1\"",
+  "fmtRating(\" 8 \")=\"8.0\"",
+  "fmtRating(\"N/A\")=\"N/A\"",
+  "fmtRating(\"\")=\"\"",
+  "naturalLess(\"S01E02\",\"S01E10\")=true",
+  "naturalLess(\"S01E10\",\"S01E02\")=false",
+  "naturalLess(\"Season 2\",\"season 10\")=true",
+  "naturalLess(\"a\",\"a\")=false",
+  "naturalLess(\"a\",\"ab\")=true",
+  "naturalLess(\"ab\",\"a\")=false",
+  "naturalLess(\"file007\",\"file7\")=false",
+  "naturalLess(\"x9y\",\"x10y\")=true",
+  "naturalLess(\"B\",\"a\")=false",
+  "commonPrefix(\"Show OVA 1\",\"Show OVA 2\")=\"Show OVA \"",
+  "commonPrefix(\"abc\",\"xyz\")=\"\"",
+  "commonPrefix(\"\",\"a\")=\"\"",
+  "date(\"dmy\")=European Mon 02/01/06 mdy",
+  "date(\"mdy\")=US Mon 01/02/06 ymd",
+  "date(\"ymd\")=ISO Mon 2006-01-02 long",
+  "date(\"long\")=written Mon 2 Jan 2006 dmy",
+  "date(\"?\")=European Mon 02/01/06 dmy"
+]

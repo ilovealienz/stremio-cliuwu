@@ -1,0 +1,18 @@
+[
+  "ext(\"https://x/a.MP4\")=.mp4",
+  "ext(\"https://x/a.webm?x=1.mkv\")=.webm",
+  "ext(\"https://x/a.exe\")=.mkv",
+  "ext(\"https://x/a\")=.mkv",
+  "ext(\"a.ts#x\")=.ts",
+  "bytes(0)=0 B",
+  "bytes(1023)=1023 B",
+  "bytes(1024)=1.0 KB",
+  "bytes(1536)=1.5 KB",
+  "bytes(1048576)=1.0 MB",
+  "bytes(5368709120)=5.0 GB",
+  "bytes(3298534883328)=3.0 TB",
+  "bytes(4611686018427387904)=4194304.0 TB",
+  "eta=\"\"",
+  "eta=\"01:00 left\"",
+  "eta=\"\""
+]

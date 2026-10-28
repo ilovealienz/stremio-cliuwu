@@ -1,0 +1,591 @@
+package ui
+
+import (
+	"fmt"
+	"sort"
+
+	tea "github.com/charmbracelet/bubbletea"
+
+	"stremio-cliuwu/internal/download"
+	"stremio-cliuwu/internal/player"
+	"stremio-cliuwu/internal/poster"
+	"stremio-cliuwu/internal/store"
+	"stremio-cliuwu/internal/stremio"
+)
+
+type seriesMetaMsg struct {
+	id      poster.AsyncID
+	sm      stremio.SeriesMeta
+	seasons []int
+}
+
+type episodesMsg struct {
+	id  poster.AsyncID
+	eps []stremio.Video
+}
+
+// ── Season picker ─────────────────────────────────────────────────────────────
+
+type seasonScreen struct {
+	baseScreen
+	id     poster.AsyncID
+	show   stremio.Meta
+	jumpTo int // season to open immediately, or noSeason for none
+	jumped bool
+
+	// Set when resuming from history: the episode to open, and where in it.
+	autoEpisode int
+	autoResume  float64
+	sm          stremio.SeriesMeta
+	seasons     []int
+
+	list   listModel
+	busy   busy
+	info   infoPane
+	loaded bool
+}
+
+func newSeasonScreen(m stremio.Meta, jumpTo int) *seasonScreen {
+	l := newList()
+	l.Empty = "no season data"
+	return &seasonScreen{
+		id: poster.NewAsyncID(), show: m, jumpTo: jumpTo,
+		list: l, busy: newBusy("fetching episode list…"), info: newInfoPane(),
+	}
+}
+
+func (s *seasonScreen) layout() {
+	s.list.SetSize(paneLayout(s.w, &s.info), s.h)
+	s.info.SetSize(paneSize(s.w, &s.info), s.h, !s.info.Split(s.w))
+}
+
+// syncInfo shows the series itself — the subject doesn't change as you move
+// between seasons, so this only has anything to do the first time.
+func (s *seasonScreen) syncInfo() tea.Cmd { return s.info.Show(s.show) }
+
+func (s *seasonScreen) Init() tea.Cmd {
+	id, m := s.id, s.show
+	return tea.Batch(
+		s.busy.start("fetching episode list…"),
+		func() tea.Msg {
+			sm := stremio.GetSeriesMeta(ctx.addons, m)
+
+			// Season 0 is a real season — it's where specials, OVAs and
+			// recaps live. On a kitsu-backed series it opens a list of those
+			// collections rather than an episode list; see specialsScreen.
+			set := map[int]bool{}
+			for _, v := range sm.Videos {
+				if v.Episode > 0 {
+					set[v.Season] = true
+				}
+			}
+			seasons := make([]int, 0, len(set))
+			for k := range set {
+				seasons = append(seasons, k)
+			}
+			sort.Ints(seasons)
+			return seriesMetaMsg{id: id, sm: sm, seasons: seasons}
+		},
+	)
+}
+
+func (s *seasonScreen) Title() string { return s.show.Name }
+
+func (s *seasonScreen) Typing() bool { return s.list.Typing() }
+
+func (s *seasonScreen) SetSize(w, h int) {
+	s.baseScreen.SetSize(w, h)
+	s.info.AutoFit(w)
+	s.layout()
+}
+
+func (s *seasonScreen) Footer() string {
+	return withStatus(s.list.Status(), keyHint(
+		[2]string{"enter", "episodes"},
+		[2]string{"i", "toggle info"},
+		[2]string{"f", "favourite show"},
+		[2]string{"w", "mark season watched"},
+		[2]string{"W", "mark whole season"},
+		[2]string{"p", "open full poster"},
+		[2]string{"I", "imdb"},
+		[2]string{"b/esc", "back"},
+	))
+}
+
+func (s *seasonScreen) rebuild() {
+	states := store.EpisodeStates(s.show.ID)
+	specials := groupSpecials(s.sm.Videos)
+
+	items := make([]Item, len(s.seasons))
+	for i, season := range s.seasons {
+		// The specials row opens a list of collections, not episodes, so a
+		// watched-count over the merged season 0 describes something you
+		// never see — 0/39 for what turns out to be two titles.
+		if season == 0 && len(specials) > 1 {
+			items[i] = Item{
+				Label: bold(seasonLabel(season)),
+				Badge: grey(fmt.Sprintf("%d titles", len(specials))),
+			}
+			continue
+		}
+
+		total, done, upcoming := 0, 0, 0
+		for _, v := range s.sm.Videos {
+			if v.Season != season {
+				continue
+			}
+			total++
+			if states[[2]int{season, v.Episode}].Watched {
+				done++
+			}
+			if !stremio.VideoAired(v) {
+				upcoming++
+			}
+		}
+
+		// A season part way through its run would otherwise sit at 6/10
+		// forever and look like you'd abandoned it.
+		aired := total - upcoming
+		badge := grey(fmt.Sprintf("%d/%d", done, total))
+		if done == aired && aired > 0 {
+			badge = good(fmt.Sprintf("%d/%d ✓", done, aired))
+		}
+		if upcoming > 0 {
+			badge += "  " + stWarn.Render(fmt.Sprintf("+%d upcoming", upcoming))
+		}
+		items[i] = Item{
+			Label:   bold(seasonLabel(season)),
+			Badge:   badge,
+			Watched: aired > 0 && done == aired,
+		}
+	}
+	s.list.SetItems(items)
+}
+
+func (s *seasonScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
+	switch m := msg.(type) {
+	case seriesMetaMsg:
+		if m.id != s.id {
+			return s, nil
+		}
+		s.busy.stop()
+		s.loaded = true
+		s.sm, s.seasons = m.sm, m.seasons
+
+		// Regrouped: take on the series' own identity as well as its
+		// episodes. Otherwise the header still says "Attack on Titan Season
+		// 3" over a list of every season — and, worse, history keys on the
+		// cour you came in through, so watching season 1 and season 3 builds
+		// two separate records for one show.
+		landOn, regrouped := 0, false
+		if s.sm.ID != "" && s.sm.ID != s.show.ID {
+			landOn, regrouped = s.sm.SeasonOf(stremio.KitsuIDOf(s.show.ID))
+			s.show.ID = s.sm.ID
+			if s.sm.Name != "" {
+				s.show.Name = s.sm.Name
+			}
+			if s.sm.Year != "" {
+				s.show.Year = s.sm.Year
+			}
+		}
+
+		s.rebuild()
+		if regrouped && s.jumpTo < 0 {
+			s.list.Focus(indexOfSeason(s.seasons, landOn))
+		}
+
+		// When we're jumping straight past this screen, don't start the info
+		// fetch: the response is delivered to whatever is on top, which by
+		// then is the episode screen, so it would arrive at the wrong place
+		// and leave this panel permanently waiting. refreshTop picks it up
+		// when you come back instead.
+		if s.jumpTo >= 0 && !s.jumped {
+			s.jumped = true
+			for i, season := range s.seasons {
+				if season == s.jumpTo {
+					s.list.Focus(i)
+					es := newEpisodeScreen(s.show, s.sm, s.jumpTo)
+					es.autoEpisode = s.autoEpisode
+					es.autoResume = s.autoResume
+					return s, push(es)
+				}
+			}
+		}
+		return s, s.syncInfo()
+
+	case player.StateMsg:
+		if s.loaded {
+			cur := s.list.Selected()
+			s.rebuild()
+			if cur >= 0 {
+				s.list.Focus(cur)
+			}
+		}
+		return s, nil
+
+	case tea.WindowSizeMsg:
+		return s, s.syncInfo()
+
+	case tea.KeyMsg:
+		if !s.list.Typing() {
+			if cmd, done := infoKeys(&s.info, s.w, s.h, m); done {
+				return s, cmd
+			}
+		}
+		if consumed, cmd := s.list.Update(msg); consumed {
+			return s, cmd
+		}
+		switch m.String() {
+		case "i":
+			s.info.Toggle()
+			s.layout()
+			return s, s.syncInfo()
+		case "enter":
+			i := s.list.Selected()
+			if i < 0 {
+				return s, nil
+			}
+			season := s.seasons[i]
+
+			// Specials on a kitsu-backed series are half a dozen separate
+			// releases sharing one season number, so offer those rather than
+			// a flat run of unrelated shorts.
+			if season == 0 && len(groupSpecials(s.sm.Videos)) > 1 {
+				return s, push(newSpecialsScreen(s.show, s.sm))
+			}
+			return s, push(newEpisodeScreen(s.show, s.sm, season))
+		case "f":
+			// Favourite what the screen is showing, not what the cursor
+			// happens to be sitting on. Press f inside a season to pin that
+			// season instead.
+			if store.ToggleFav(store.Favourite{
+				Name: s.show.Name, ID: s.show.ID, Type: s.show.Type,
+				Source: s.show.Source, Year: s.show.Year,
+			}) {
+				return s, toast("favourited " + s.show.Name)
+			}
+			return s, toast("removed " + s.show.Name + " from favourites")
+		case "w", "W":
+			if i := s.list.Selected(); i >= 0 {
+				season := s.seasons[i]
+				var eps []stremio.Video
+				for _, v := range s.sm.Videos {
+					if v.Season == season {
+						eps = append(eps, v)
+					}
+				}
+				states := store.EpisodeStates(s.show.ID)
+				all := len(eps) > 0
+				for _, v := range eps {
+					if !states[[2]int{season, v.Episode}].Watched {
+						all = false
+						break
+					}
+				}
+				store.SetSeasonWatched(s.show, season, eps, !all)
+				s.rebuild()
+				s.list.Focus(i)
+				if all {
+					return s, toast(seasonLabel(season) + " marked unwatched")
+				}
+				return s, toast(seasonLabel(season) + " marked watched")
+			}
+		case "esc", "backspace":
+			return s, pop()
+		case "q":
+			return s, popRoot()
+		}
+	}
+	return s, tea.Batch(s.busy.update(msg), s.info.Update(msg))
+}
+
+func (s *seasonScreen) View() string {
+	if !s.loaded {
+		return s.busy.view()
+	}
+	if s.info.On() && !s.info.Split(s.w) {
+		return s.info.View()
+	}
+	return joinPane(s.list.View(), paneLayout(s.w, &s.info), &s.info)
+}
+
+// ── Episode list ──────────────────────────────────────────────────────────────
+
+type episodeScreen struct {
+	baseScreen
+	id     poster.AsyncID
+	show   stremio.Meta
+	sm     stremio.SeriesMeta
+	season int
+	eps    []stremio.Video
+
+	// Resume target, set when arriving from continue-watching.
+	autoEpisode int
+	autoResume  float64
+	autoDone    bool
+
+	list   listModel
+	busy   busy
+	info   infoPane
+	loaded bool
+}
+
+func newEpisodeScreen(m stremio.Meta, sm stremio.SeriesMeta, season int) *episodeScreen {
+	l := newList()
+	l.Empty = "no episodes"
+	return &episodeScreen{
+		id: poster.NewAsyncID(), show: m, sm: sm, season: season,
+		list: l, busy: newBusy("loading episodes…"), info: newInfoPane(),
+	}
+}
+
+func (s *episodeScreen) layout() {
+	s.list.SetSize(paneLayout(s.w, &s.info), s.h)
+	s.info.SetSize(paneSize(s.w, &s.info), s.h, !s.info.Split(s.w))
+}
+
+// syncInfo shows the highlighted episode. No fetch — GetSeriesMeta already
+// pulled the overviews down with the episode list.
+func (s *episodeScreen) syncInfo() tea.Cmd {
+	i := s.list.Selected()
+	if i < 0 || i >= len(s.eps) {
+		return nil
+	}
+	return s.info.ShowEpisode(s.show.Name, s.eps[i])
+}
+
+func (s *episodeScreen) Init() tea.Cmd {
+	id, m, sm, season := s.id, s.show, s.sm, s.season
+	return tea.Batch(
+		s.busy.start("loading episodes…"),
+		func() tea.Msg {
+			return episodesMsg{id: id, eps: stremio.GetSeasonEpisodes(m, season, sm, ctx.cfg.OmdbKey)}
+		},
+	)
+}
+
+func (s *episodeScreen) Title() string { return seasonLabel(s.season) }
+
+func (s *episodeScreen) Typing() bool { return s.list.Typing() }
+
+func (s *episodeScreen) SetSize(w, h int) {
+	s.baseScreen.SetSize(w, h)
+	s.info.AutoFit(w)
+	s.layout()
+}
+
+func (s *episodeScreen) Footer() string {
+	return withStatus(s.list.Status(), keyHint(
+		[2]string{"enter", "streams"},
+		[2]string{"i", "toggle info"},
+		[2]string{"f", "favourite season"},
+		[2]string{"w", "mark watched"},
+		[2]string{"W", "mark whole season"},
+		[2]string{"/", "filter"},
+		[2]string{"p", "open full poster"},
+		[2]string{"I", "imdb"},
+		[2]string{"b/esc", "back"},
+	))
+}
+
+func (s *episodeScreen) rebuild() {
+	states := store.EpisodeStates(s.show.ID) // one read, not one per row
+	live := ctx.player.State()
+
+	items := make([]Item, len(s.eps))
+	for i, v := range s.eps {
+		st := states[[2]int{s.season, v.Episode}]
+		it := epItem(v, st.Watched)
+
+		pos, dur := st.Position, st.Duration
+
+		// The on-disk position lags by up to a second and isn't written at all
+		// until mpv reports a duration, so prefer live player state for the
+		// episode actually on screen right now.
+		playing := live.Alive && live.VideoID == v.ID && !live.ErrorClip
+		if playing {
+			pos, dur = live.Pos, live.Duration
+		}
+
+		if pos > 0 && dur > 0 && !it.Watched {
+			glyph := "▶ " + download.FmtSecs(pos) + " / " + download.FmtSecs(dur)
+			if playing {
+				it.Badge = accent(glyph) + "  " + it.Badge
+			} else {
+				it.Badge = yell(glyph) + "  " + it.Badge
+			}
+		}
+		items[i] = it
+	}
+	s.list.SetItems(items)
+}
+
+// firstUnwatched returns the index of the first episode not yet watched.
+func (s *episodeScreen) firstUnwatched() int {
+	states := store.EpisodeStates(s.show.ID)
+	for i, v := range s.eps {
+		if !states[[2]int{s.season, v.Episode}].Watched {
+			return i
+		}
+	}
+	return 0
+}
+
+func (s *episodeScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
+	switch m := msg.(type) {
+	case episodesMsg:
+		if m.id != s.id {
+			return s, nil
+		}
+		s.busy.stop()
+		s.loaded = true
+		s.eps = m.eps
+		s.rebuild()
+
+		// Coming from continue-watching: focus and open the episode we left
+		// off on. Doing it here rather than in the menu means the season and
+		// episode screens end up on the stack underneath, so backing out of
+		// the stream picker lands on the episode list like it used to.
+		if s.autoEpisode > 0 && !s.autoDone {
+			s.autoDone = true
+			for i, v := range s.eps {
+				if v.Episode == s.autoEpisode {
+					s.list.Focus(i)
+					return s, push(s.streamFor(i, s.autoResume))
+				}
+			}
+		}
+
+		s.list.Focus(s.firstUnwatched())
+		return s, s.syncInfo()
+
+	case player.StateMsg:
+		if s.loaded {
+			cur := s.list.Selected()
+			s.rebuild()
+			if cur >= 0 {
+				s.list.Focus(cur)
+			}
+		}
+		return s, nil
+
+	case tea.WindowSizeMsg:
+		return s, s.syncInfo()
+
+	case tea.KeyMsg:
+		if !s.list.Typing() {
+			if cmd, done := infoKeys(&s.info, s.w, s.h, m); done {
+				return s, cmd
+			}
+		}
+		if consumed, cmd := s.list.Update(msg); consumed {
+			// Cursor moved — the panel follows the highlighted episode.
+			return s, tea.Batch(cmd, s.syncInfo())
+		}
+		switch m.String() {
+		case "i":
+			s.info.Toggle()
+			s.layout()
+			return s, s.syncInfo()
+		case "enter":
+			i := s.list.Selected()
+			if i < 0 {
+				return s, nil
+			}
+			pos, _, _ := store.GetPositionByEpisode(s.show.ID, s.season, s.eps[i].Episode)
+			return s, push(s.streamFor(i, pos))
+		case "f":
+			if store.ToggleFav(store.Favourite{
+				Name: s.show.Name, ID: s.show.ID, Type: s.show.Type,
+				Source: s.show.Source, Year: s.show.Year, Season: s.season,
+			}) {
+				return s, toast(fmt.Sprintf("favourited %s S%02d", s.show.Name, s.season))
+			}
+			return s, toast(fmt.Sprintf("removed %s S%02d from favourites", s.show.Name, s.season))
+		case "w":
+			if i := s.list.Selected(); i >= 0 {
+				v := s.eps[i]
+
+				e := store.HistoryEntry{
+					Name: s.show.Name, ID: s.show.ID, Type: "series",
+					Source: s.show.Source, Year: s.show.Year,
+					Season: s.season, Episode: v.Episode,
+					VideoID: v.ID, EpTitle: v.Title,
+					EpisodeTotal: len(s.eps),
+				}
+
+				// Record what follows, same as playing it would. The full
+				// video list is right here, so next-up works from a marked
+				// episode rather than only from a played one.
+				q := stremio.EpQueue{Show: s.show, Season: s.season, Episodes: s.eps, Index: i, All: s.sm.Videos}
+				if n, season, ok := q.Upcoming(); ok {
+					e.NextVideoID = n.ID
+					e.NextSeason = season
+					e.NextEpisode = n.Episode
+					e.NextTitle = n.Title
+					e.NextReleased = n.Released
+				}
+
+				now := store.ToggleWatchedByEpisode(e)
+				s.rebuild()
+				s.list.Focus(i)
+				if now {
+					return s, toast("marked " + stremio.FmtEp(v.Season, v.Episode, v.ID) + " watched")
+				}
+				return s, toast("marked " + stremio.FmtEp(v.Season, v.Episode, v.ID) + " unwatched")
+			}
+		case "W":
+			// Whole season, in one write rather than one per episode.
+			allWatched := true
+			states := store.EpisodeStates(s.show.ID)
+			for _, v := range s.eps {
+				if !states[[2]int{s.season, v.Episode}].Watched {
+					allWatched = false
+					break
+				}
+			}
+			store.SetSeasonWatched(s.show, s.season, s.eps, !allWatched)
+			cur := s.list.Selected()
+			s.rebuild()
+			if cur >= 0 {
+				s.list.Focus(cur)
+			}
+			if allWatched {
+				return s, toast(seasonLabel(s.season) + " marked unwatched")
+			}
+			return s, toast(seasonLabel(s.season) + " marked watched")
+		case "esc", "backspace":
+			return s, pop()
+		case "q":
+			return s, popRoot()
+		}
+	}
+	return s, tea.Batch(s.busy.update(msg), s.info.Update(msg))
+}
+
+// streamFor builds the stream picker for episode index i.
+func (s *episodeScreen) streamFor(i int, resume float64) screen {
+	v := s.eps[i]
+	return newStreamScreen(store.StreamTarget{
+		Meta:      s.show,
+		MediaType: "series",
+		VideoID:   v.ID,
+		StreamID:  v.StreamID(),
+		Label:     s.show.Name + " · " + stremio.FmtEp(v.Season, v.Episode, v.ID),
+		Resume:    resume,
+		Queue: &stremio.EpQueue{
+			Show: s.show, Season: s.season, Episodes: s.eps, Index: i,
+			All: s.sm.Videos,
+		},
+	})
+}
+
+func (s *episodeScreen) View() string {
+	if !s.loaded {
+		return s.busy.view()
+	}
+	if s.info.On() && !s.info.Split(s.w) {
+		return s.info.View()
+	}
+	return joinPane(s.list.View(), paneLayout(s.w, &s.info), &s.info)
+}

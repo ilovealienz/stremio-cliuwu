@@ -1,0 +1,20 @@
+[
+  "folders=true movie /root/Movies/(2010) Inception.mp4",
+  "folders=true unnamed /root/Movies/Some Label.mkv",
+  "folders=true episode /root/Show- Name/Season 02/05 Ep-Five.mkv",
+  "folders=true lib \"Pack Name\" \"Season 1/E01.mkv\" /root/Pack Name/Season 1/E01.mkv",
+  "folders=true lib \"\" \"Season 1/E01.mkv\" /root/Season 1/E01.mkv",
+  "folders=true lib \"Pack Name\" \"a//b:c.mkv\" /root/Pack Name/a/b-c.mkv",
+  "folders=true lib \"\" \"a//b:c.mkv\" /root/a/b-c.mkv",
+  "folders=true lib \"Pack Name\" \"flat.mkv\" /root/Pack Name/flat.mkv",
+  "folders=true lib \"\" \"flat.mkv\" /root/flat.mkv",
+  "folders=false movie /root/(2010) Inception.mp4",
+  "folders=false unnamed /root/Some Label.mkv",
+  "folders=false episode /root/05 Ep-Five.mkv",
+  "folders=false lib \"Pack Name\" \"Season 1/E01.mkv\" /root/E01.mkv",
+  "folders=false lib \"\" \"Season 1/E01.mkv\" /root/E01.mkv",
+  "folders=false lib \"Pack Name\" \"a//b:c.mkv\" /root/b-c.mkv",
+  "folders=false lib \"\" \"a//b:c.mkv\" /root/b-c.mkv",
+  "folders=false lib \"Pack Name\" \"flat.mkv\" /root/flat.mkv",
+  "folders=false lib \"\" \"flat.mkv\" /root/flat.mkv"
+]

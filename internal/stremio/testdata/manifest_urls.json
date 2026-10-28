@@ -1,0 +1,18 @@
+[
+  "norm(\"\")=\"\" err=empty url",
+  "norm(\"  torrentio.strem.fun  \")=\"https://torrentio.strem.fun/manifest.json\" err=\u003cnil\u003e",
+  "norm(\"https://torrentio.strem.fun/manifest.json\")=\"https://torrentio.strem.fun/manifest.json\" err=\u003cnil\u003e",
+  "norm(\"stremio://addon.example/torbox=abcdefghijk/manifest.json\")=\"https://addon.example/torbox=abcdefghijk/manifest.json\" err=\u003cnil\u003e",
+  "norm(\"[Torrentio](https://torrentio.strem.fun/realdebrid=XYZ123456/)\")=\"https://torrentio.strem.fun/realdebrid=XYZ123456/manifest.json\" err=\u003cnil\u003e",
+  "norm(\"ftp://weird.example/path\")=\"https://weird.example/path/manifest.json\" err=\u003cnil\u003e",
+  "norm(\"http://127.0.0.1:11470/\")=\"http://127.0.0.1:11470/manifest.json\" err=\u003cnil\u003e",
+  "norm(\"https:///nohost\")=\"\" err=no host in url",
+  "redact(\"https://torrentio.strem.fun/realdebrid=ABCDEFGHIJ/manifest.json\")=\"https://torrentio.strem.fun/realdebrid=ABC%E2%80%A6IJ/manifest.json\"",
+  "redact(\"https://x.example/a=short/b=1234567/manifest.json\")=\"https://x.example/a=short/b=123%E2%80%A667/manifest.json\"",
+  "redact(\"https://x.example/manifest.json\")=\"https://x.example/manifest.json\"",
+  "redact(\"::bad\")=\"::bad\"",
+  "label=\"Named\" base=\"https://a.example\"",
+  "label=\"host.example\" base=\"https://host.example/x\"",
+  "label=\"org.id\" base=\"\"",
+  "label=\"addon\" base=\"\""
+]

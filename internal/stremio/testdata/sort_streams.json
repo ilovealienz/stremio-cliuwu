@@ -1,0 +1,47 @@
+{
+  "1080p": [
+    "c 1080p",
+    "e 1080p ⚡",
+    "d 4K ⏳",
+    "b 1080p [RD+]",
+    "a 720p",
+    "g 1080p [TB download]",
+    "f 720p"
+  ],
+  "1080p+cached": [
+    "e 1080p ⚡",
+    "c 1080p",
+    "d 4K ⏳",
+    "b 1080p [RD+]",
+    "a 720p",
+    "f 720p",
+    "g 1080p [TB download]"
+  ],
+  "4k+cached": [
+    "e 1080p ⚡",
+    "c 1080p",
+    "d 4K ⏳",
+    "b 1080p [RD+]",
+    "a 720p",
+    "f 720p",
+    "g 1080p [TB download]"
+  ],
+  "cached": [
+    "e 1080p ⚡",
+    "c 1080p",
+    "d 4K ⏳",
+    "b 1080p [RD+]",
+    "a 720p",
+    "f 720p",
+    "g 1080p [TB download]"
+  ],
+  "none": [
+    "c 1080p",
+    "d 4K ⏳",
+    "e 1080p ⚡",
+    "a 720p",
+    "b 1080p [RD+]",
+    "f 720p",
+    "g 1080p [TB download]"
+  ]
+}

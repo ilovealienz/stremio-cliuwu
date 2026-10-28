@@ -7,6 +7,13 @@ plays in mpv. Keeps track of what you've watched and where you got to.
 
 CLICK SCREENSHOT FOR VIDEO DEMO
 
+> **Updating from before v0.6.8?** Your addons, favourites and history moved out
+> of `~/.config`. Run this once:
+>
+> ```
+> mkdir -p ~/.local/share/stremio-cliuwu ~/.local/state/stremio-cliuwu && mv ~/.config/stremio-cliuwu/{addons,favourites}.json ~/.local/share/stremio-cliuwu/ ; mv ~/.config/stremio-cliuwu/{history,downloads}.json ~/.local/state/stremio-cliuwu/
+> ```
+
 ## Install
 
 Grab a binary from [releases](https://github.com/ilovealienz/stremio-cliuwu/releases),
@@ -88,7 +95,8 @@ From the main menu you can jump straight to things: `m` movies, `s` shows,
 `A` addons, `c` settings, `w` continue watching.
 
 On an episode list, `w` marks one watched and `W` does the whole season. On a
-catalog, `g` picks a genre. On a stream, `D` downloads it.
+catalog, `g` picks a genre. On a stream, `D` downloads it, `n` queues it to play
+next, and `[` `]` move between episodes.
 
 Pause and seek aren't bound — do that in the mpv window, it's right there.
 
@@ -116,7 +124,8 @@ selecting something you've partly watched asks whether to resume or start over.
 
 **Next episode loads itself.** Near the end of an episode it fetches the next
 one's streams and puts them on screen, so when the current one ends you just
-pick and go.
+pick and go. With **autoplay** on (`a` on a stream list) it picks the closest
+match to what you were watching and plays it, up to the end of the season.
 
 **Watched isn't a flat percentage.** A ten minute cartoon and a two hour film
 shouldn't need the same fraction watched to count as finished, so the
@@ -151,14 +160,15 @@ open, press `R` on the stream list to fetch fresh ones.
 
 ## Config
 
-Lives in `~/.config/stremio-cliuwu/` (or `%APPDATA%\stremio-cliuwu\`):
+Everything is in `%APPDATA%\stremio-cliuwu\` on Windows.
 
 | | |
 |---|---|
-| `config.json` | mpv path, quality, downloads, appearance |
-| `addons.json` | your addon URLs |
-| `favourites.json` | |
-| `history.json` | positions and watched state |
+| `~/.config/stremio-cliuwu/config.json` | mpv path, quality, downloads, appearance |
+| `~/.local/share/stremio-cliuwu/addons.json` | your addon URLs |
+| `~/.local/share/stremio-cliuwu/favourites.json` | |
+| `~/.local/state/stremio-cliuwu/history.json` | positions and watched state |
+| `~/.local/state/stremio-cliuwu/downloads.json` | |
 
 Everything in `config.json` is editable from the settings screen, so you
 shouldn't need to touch these by hand.
