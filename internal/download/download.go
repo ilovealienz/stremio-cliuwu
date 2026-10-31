@@ -114,11 +114,28 @@ type partInfo struct {
 	URL   string `json:"url"`
 	Total int64  `json:"total"`
 	Label string `json:"label,omitempty"`
+
+	// Set by aria2c downloads: the file's name on the server, for resuming
+	// with a refetched link, and the bytes done, since its partial file has
+	// gaps and its size says nothing.
+	Name string `json:"name,omitempty"`
+	Done int64  `json:"done,omitempty"`
 }
 
 func partPath(final string) string { return final + ".part" }
 
 func infoPath(final string) string { return final + ".part.json" }
+
+// controlPath is aria2c's resume file beside its partial.
+func controlPath(final string) string { return final + ".part.aria2" }
+
+// partDone is how much of a partial is downloaded.
+func partDone(final string, pi partInfo) int64 {
+	if _, err := os.Stat(controlPath(final)); err == nil {
+		return pi.Done
+	}
+	return fileSize(partPath(final))
+}
 
 func readPartInfo(final string) (partInfo, bool) {
 	var pi partInfo
@@ -185,14 +202,18 @@ func LibraryPath(root, pack, rel string) string {
 	return filepath.Join(parts...)
 }
 
-// fitFile shortens a file name to fit beside its .part.json sidecar,
-// keeping the extension.
+// partRoom is what a download's name must leave for its partial files.
+// aria2c saves its resume file through a temporary name, the longest of them.
+const partRoom = len(".part.aria2__temp")
+
+// fitFile shortens a file name to fit beside its partial files, keeping the
+// extension.
 func fitFile(name string) string {
 	ext := filepath.Ext(name)
 	if len(ext) > 10 { // not an extension, just a dot in the name
 		ext = ""
 	}
-	return store.FitName(strings.TrimSuffix(name, ext), store.MaxNameBytes-len(ext)-len(".part.json")) + ext
+	return store.FitName(strings.TrimSuffix(name, ext), store.MaxNameBytes-len(ext)-partRoom) + ext
 }
 
 // Path works out where a stream should land.
@@ -230,7 +251,7 @@ func Path(root string, t store.StreamTarget, url string) string {
 	for i := range segs {
 		max := store.MaxNameBytes
 		if i == len(segs)-1 {
-			max -= len(ext) + len(".part.json")
+			max -= len(ext) + partRoom
 		}
 		segs[i] = store.FitName(segs[i], max)
 	}
@@ -298,7 +319,7 @@ func (d *Downloader) Load() {
 				continue
 			}
 			dl.State, dl.Resume = Cancelled, true
-			dl.URL, dl.Total, dl.Done = pi.URL, pi.Total, part
+			dl.URL, dl.Total, dl.Done = pi.URL, pi.Total, partDone(r.Path, pi)
 			if dl.Label == "" {
 				dl.Label = pi.Label
 			}
@@ -348,11 +369,22 @@ type Downloader struct {
 	// a stop once more bytes arrive, so a stalled connection ignored it.
 	abort map[int]context.CancelFunc
 
+	// Removed while active: the worker deletes the files once it has stopped.
+	purge map[int]string
+
 	prog *tea.Program
 }
 
 func New() *Downloader {
-	return &Downloader{cancel: map[int]bool{}, abort: map[int]context.CancelFunc{}}
+	return &Downloader{cancel: map[int]bool{}, abort: map[int]context.CancelFunc{}, purge: map[int]string{}}
+}
+
+// deleteFiles removes a download's partial file, sidecar and aria2c's
+// resume file.
+func deleteFiles(path string) {
+	os.Remove(infoPath(path))
+	os.Remove(partPath(path))
+	os.Remove(controlPath(path))
 }
 
 func (d *Downloader) Attach(p *tea.Program) { d.prog = p }
@@ -451,16 +483,6 @@ func (d *Downloader) Scan(root string) int {
 
 		final := strings.TrimSuffix(path, ".part.json")
 
-		fi, err := os.Stat(partPath(final))
-		if err != nil {
-			os.Remove(path) // sidecar with no data beside it
-			return nil
-		}
-		pi, ok := readPartInfo(final)
-		if !ok || pi.URL == "" {
-			return nil
-		}
-
 		d.mu.Lock()
 		known := false
 		for _, it := range d.items {
@@ -469,20 +491,33 @@ func (d *Downloader) Scan(root string) int {
 				break
 			}
 		}
-		if !known {
-			label := pi.Label
-			if label == "" {
-				label = BaseName(final)
-			}
-			d.seq++
-			d.items = append(d.items, &Download{
-				ID: d.seq, Label: label, URL: pi.URL, Path: final,
-				Total: pi.Total, Done: fi.Size(),
-				State: Cancelled, Resume: true,
-			})
-			found++
-		}
 		d.mu.Unlock()
+		if known {
+			return nil // a running one writes its sidecar before its data
+		}
+
+		if _, err := os.Stat(partPath(final)); err != nil {
+			os.Remove(path) // sidecar with no data beside it
+			return nil
+		}
+		pi, ok := readPartInfo(final)
+		if !ok || pi.URL == "" {
+			return nil
+		}
+
+		label := pi.Label
+		if label == "" {
+			label = BaseName(final)
+		}
+		d.mu.Lock()
+		d.seq++
+		d.items = append(d.items, &Download{
+			ID: d.seq, Label: label, URL: pi.URL, Path: final,
+			Total: pi.Total, Done: partDone(final, pi),
+			State: Cancelled, Resume: true,
+		})
+		d.mu.Unlock()
+		found++
 		return nil
 	})
 
@@ -495,7 +530,7 @@ func (d *Downloader) Scan(root string) int {
 // Resume re-queues a stopped or failed download.
 func (d *Downloader) Resume(id int) bool {
 	d.mu.Lock()
-	var start bool
+	var start, found bool
 	for _, it := range d.items {
 		if it.ID != id {
 			continue
@@ -504,6 +539,7 @@ func (d *Downloader) Resume(id int) bool {
 			d.mu.Unlock()
 			return false
 		}
+		found = true
 		it.State, it.Err = Queued, nil
 		start = !d.running
 		if start {
@@ -512,6 +548,9 @@ func (d *Downloader) Resume(id int) bool {
 		break
 	}
 	d.mu.Unlock()
+	if !found {
+		return false
+	}
 
 	if start {
 		go d.worker()
@@ -599,7 +638,7 @@ func (d *Downloader) Remove(id int) bool {
 	d.mu.Lock()
 
 	var path string
-	found := false
+	found, active := false, false
 	kept := d.items[:0]
 	for _, it := range d.items {
 		if it.ID != id {
@@ -608,7 +647,9 @@ func (d *Downloader) Remove(id int) bool {
 		}
 		found, path = true, it.Path
 		if it.State == Active {
+			active = true
 			d.cancel[id] = true
+			d.purge[id] = path
 			if abort := d.abort[id]; abort != nil {
 				abort()
 			}
@@ -624,12 +665,11 @@ func (d *Downloader) Remove(id int) bool {
 		return false
 	}
 
-	// The worker may still be writing to the part file for a moment after the
-	// abort. Removing the sidecar first is what matters: without it neither
-	// Load nor Scan will rebuild the entry, so a part file that outlives this
-	// call is inert rather than resurrected.
-	os.Remove(infoPath(path))
-	os.Remove(partPath(path))
+	// An active download can still write its files until it stops, so its
+	// worker deletes them.
+	if !active {
+		deleteFiles(path)
+	}
 	d.save()
 	// Deliberately no emit here. A confirm screen runs its onYes inline from
 	// Update, on the ui goroutine, and Send blocks until the event loop reads
@@ -688,8 +728,10 @@ func (d *Downloader) worker() {
 
 		d.mu.Lock()
 		cancelled := d.cancel[dl.ID] || errors.Is(err, errStopped)
+		purge, removed := d.purge[dl.ID]
 		delete(d.cancel, dl.ID)
 		delete(d.abort, dl.ID)
+		delete(d.purge, dl.ID)
 		switch {
 		case cancelled:
 			dl.State = Cancelled
@@ -701,6 +743,9 @@ func (d *Downloader) worker() {
 		label, state := dl.Label, dl.State
 		d.mu.Unlock()
 
+		if removed {
+			deleteFiles(purge)
+		}
 		d.save()
 		if state != Cancelled {
 			d.emit(DoneMsg{Label: label, Err: err})
@@ -713,9 +758,21 @@ func (d *Downloader) fetch(dl *Download) error {
 	if err := os.MkdirAll(filepath.Dir(dl.Path), 0755); err != nil {
 		return err
 	}
+	if store.Cfg.Aria2 {
+		bin, err := aria2Path()
+		if err != nil {
+			return err
+		}
+		return d.fetchAria2(dl, bin)
+	}
 
 	part := partPath(dl.Path)
 	var offset int64
+
+	// aria2c's partial has gaps, so only it can carry on from one.
+	if _, err := os.Stat(controlPath(dl.Path)); err == nil {
+		deleteFiles(dl.Path)
+	}
 
 	// Resume only when the sidecar agrees the partial came from this URL.
 	if pi, ok := readPartInfo(dl.Path); ok && pi.URL == dl.URL {

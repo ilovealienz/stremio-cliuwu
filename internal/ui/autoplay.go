@@ -27,7 +27,7 @@ type autoPickMsg struct {
 // other streams came back: the one that failed may be the one the last
 // episode played from.
 func autoFetch(prev player.PlayRequest, patient bool) tea.Cmd {
-	t, ok := stepTarget(prev.Queue, 1)
+	t, ok := nextTarget(prev.Queue)
 	if !ok {
 		return nil
 	}
@@ -60,8 +60,8 @@ func hasPlayable(streams []stremio.Stream) bool {
 // addon tab and filter narrow the list first; a tab or filter that matches
 // nothing means no pick, so the list opens.
 //
-// The rest follows Sonarr: candidates are the streams sharing prev's
-// bingeGroup, then the ones at least as cached as the top stream.
+// The rest follows Sonarr: candidates are the streams at least as cached as
+// the top stream, those sharing prev's bingeGroup first.
 // Releases that name another episode, or are a special or a batch when prev
 // wasn't, are dropped. The rest are compared field by field in order
 // (variant and language, the same show, the same title words, resolution,
@@ -98,13 +98,19 @@ func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Con
 	// Addons sometimes answer with other episodes: another week of a daily
 	// show, or a mislabelled file. A name that says which episode it is
 	// has to say this one.
-	if nq, ok := prev.Queue.Step(1); ok {
-		v := nq.Episodes[nq.Index]
+	nextTitle := ""
+	if nq, ok := prev.Queue.Next(cfg.NextSeason); ok {
+		v, was := nq.Episodes[nq.Index], prev.Queue.Episodes[prev.Queue.Index]
+		nextTitle = v.Title
 		aired, _ := time.Parse(time.RFC3339, v.Released)
 		extra := stremio.Extra(prev.Release)
+		file := stremio.NamesFile(prev.Release)
 		keep(func(st stremio.Stream) bool {
 			name := stremio.ReleaseName(st)
-			return !otherEpisode(name, v, aired) && (extra || !stremio.Extra(name))
+			if file && name == prev.Release {
+				return false // the file that just played
+			}
+			return !otherEpisode(name, v, was, aired) && (extra || !stremio.Extra(name))
 		})
 	}
 	if len(cands) == 0 {
@@ -120,7 +126,16 @@ func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Con
 		}
 	}
 	top := stremio.StreamCached(cands[0])
-	keep(func(st stremio.Stream) bool { return stremio.StreamCached(st) >= top })
+	cached := func(st stremio.Stream) bool { return stremio.StreamCached(st) >= top }
+	keep(cached)
+	n := 0
+	for _, st := range group {
+		if cached(st) {
+			group[n] = st
+			n++
+		}
+	}
+	group = group[:n]
 	if prev.Release == "" {
 		if len(group) > 0 {
 			return group[0], true
@@ -136,7 +151,6 @@ func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Con
 			original = "jp" // Japanese audio is the original, tagged or not
 		}
 	}
-	nextTitle := epTitle(prev.Queue, 1)
 	parsed := map[string]stremio.ReleaseInfo{} // each stream is read once, by URL
 	parse := func(st stremio.Stream) stremio.ReleaseInfo {
 		if r, ok := parsed[st.URL]; ok {
@@ -229,10 +243,16 @@ func sizeStep(n, want int64) int {
 }
 
 // otherEpisode reports whether a release name says it's a different episode
-// from v: another number in the same season, or a date days off its airing.
-func otherEpisode(name string, v stremio.Video, aired time.Time) bool {
-	if s, first, last, ok := stremio.NameEpisode(name); ok && s == v.Season && (v.Episode < first || v.Episode > last) {
-		return true
+// from v: another number in the same season, one from the season just
+// finished up to was, or a date days off its airing.
+func otherEpisode(name string, v, was stremio.Video, aired time.Time) bool {
+	if s, first, last, ok := stremio.NameEpisode(name); ok {
+		if s == v.Season && (v.Episode < first || v.Episode > last) {
+			return true
+		}
+		if s != v.Season && s == was.Season && first <= was.Episode {
+			return true
+		}
 	}
 	if d, ok := stremio.NameDate(name); ok && !aired.IsZero() {
 		return d.Sub(aired).Abs() > 3*24*time.Hour

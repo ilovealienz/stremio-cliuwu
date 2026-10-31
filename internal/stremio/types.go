@@ -3,6 +3,7 @@ package stremio
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 )
 
@@ -497,6 +498,30 @@ func (q *EpQueue) Step(delta int) (*EpQueue, bool) {
 	nq := *q
 	nq.Index = i
 	return &nq, true
+}
+
+// Next is the episode to play after this one. With cross, a season's last
+// episode is followed by the next season's first, once that has aired.
+func (q *EpQueue) Next(cross bool) (*EpQueue, bool) {
+	if nq, ok := q.Step(1); ok || !cross || q == nil || q.Season == 0 || q.Index+1 < len(q.Episodes) {
+		return nq, ok
+	}
+	v, season, ok := q.Upcoming()
+	if !ok || season == q.Season || !VideoAired(v) {
+		return nil, false
+	}
+	byEp := map[int]Video{}
+	for _, e := range q.All {
+		if e.Season == season {
+			byEp[e.Episode] = e
+		}
+	}
+	eps := make([]Video, 0, len(byEp))
+	for _, e := range byEp {
+		eps = append(eps, e)
+	}
+	sort.Slice(eps, func(i, j int) bool { return eps[i].Episode < eps[j].Episode })
+	return &EpQueue{Show: q.Show, Season: season, Episodes: eps, All: q.All}, true
 }
 
 // Upcoming is the episode after this one whether or not it has aired.

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 
 	"stremio-cliuwu/internal/download"
 	"stremio-cliuwu/internal/player"
@@ -78,7 +79,70 @@ func (s *menuScreen) SetSize(w, h int) {
 	s.baseScreen.SetSize(w, h)
 	s.panel.AutoFit(w)
 	s.layout()
-	s.panel.Refresh()
+	cur := s.list.Selected()
+	s.rebuild() // the resume row fits itself to the width
+	if cur >= 0 {
+		s.list.Focus(cur)
+	}
+}
+
+// menuLabelW is the columns a menu row uses besides its sub: the cursor, key,
+// label and gaps, and the list's right margin.
+const menuLabelW = 24
+
+// resumeSub is the resume row's text in w columns. The show and episode names
+// give way first, so the episode number and progress always show.
+func resumeSub(name, ep, title, detail string, w int) string {
+	fixed := "   ·   " + detail
+	if ep != "" {
+		fixed = " · " + ep + fixed
+	}
+	if w <= 0 { // not sized yet
+		out := name
+		if ep != "" {
+			out += " · " + ep
+		}
+		if title != "" {
+			out += " — " + title
+		}
+		return out + "   ·   " + detail
+	}
+	free := w - lipgloss.Width(fixed)
+	if title != "" {
+		free -= lipgloss.Width(" — ")
+	}
+	// Short of room the episode title goes first, then the show's name.
+	if title != "" && free < 12 {
+		title, free = "", free+lipgloss.Width(" — ")
+	}
+	if free < 6 {
+		if ep != "" {
+			return ep + "   ·   " + detail
+		}
+		return detail
+	}
+
+	nw, tw := lipgloss.Width(name), lipgloss.Width(title)
+	if nw+tw > free {
+		// Each gets half, and whatever the other doesn't need.
+		half := free / 2
+		switch {
+		case nw <= half:
+			tw = free - nw
+		case tw <= half:
+			nw = free - tw
+		default:
+			nw, tw = half, free-half
+		}
+	}
+	out := ellipsize(name, nw)
+	if ep != "" {
+		out += " · " + ep
+	}
+	if title != "" {
+		out += " — " + ellipsize(title, tw)
+	}
+	return out + fixed[strings.Index(fixed, "   ·   "):]
 }
 
 func (s *menuScreen) Footer() string {
@@ -117,12 +181,9 @@ func (s *menuScreen) rebuild() {
 	if c := s.resume; c != nil {
 		e := c.Entry
 
-		what := e.Name
+		ep := ""
 		if e.Episode > 0 {
-			what += " · " + stremio.FmtEp(e.Season, e.Episode, e.VideoID)
-		}
-		if e.EpTitle != "" {
-			what += " — " + e.EpTitle
+			ep = stremio.FmtEp(e.Season, e.Episode, e.VideoID)
 		}
 
 		label := "continue"
@@ -167,7 +228,7 @@ func (s *menuScreen) rebuild() {
 				// the far right, where it read as unrelated to the row.
 				key:   "w",
 				label: label,
-				sub:   what + "   ·   " + detail,
+				sub:   resumeSub(e.Name, ep, e.EpTitle, detail, continuePanelLayout(s.w, &s.panel)-menuLabelW),
 				open:  func() tea.Cmd { return push(resumeScreen(entry)) },
 			},
 			spacer(),
@@ -303,7 +364,11 @@ func (s *menuScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		if m.String() == "i" {
 			s.panel.Toggle()
 			s.layout()
-			s.panel.Refresh()
+			cur := s.list.Selected()
+			s.rebuild() // the resume row fits itself to the new width
+			if cur >= 0 {
+				s.list.Focus(cur)
+			}
 			return s, s.fetchTargetInfo()
 		}
 		if cmd := s.accel(m.String()); cmd != nil {

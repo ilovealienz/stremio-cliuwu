@@ -2,9 +2,13 @@ package download
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"stremio-cliuwu/internal/store"
@@ -131,5 +135,77 @@ func TestPathEdgeCases(t *testing.T) {
 		if !strings.HasSuffix(p, ".mkv") {
 			t.Errorf("lost the extension: %s", p)
 		}
+	}
+}
+
+func TestRemoveWhileActiveLeavesNothing(t *testing.T) {
+	gate := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "2097152")
+		w.Write(make([]byte, 1048576))
+		w.(http.Flusher).Flush()
+		<-gate // the rest arrives after the remove
+		w.Write(make([]byte, 1048576))
+	}))
+	defer srv.Close()
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+
+	d := New()
+	path := filepath.Join(t.TempDir(), "ep.mkv")
+	d.Add("ep", srv.URL+"/ep.mkv", path)
+	for i := 0; i < 200; i++ {
+		if _, err := os.Stat(infoPath(path)); err == nil {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	d.Remove(d.Snapshot()[0].ID)
+	close(gate)
+
+	for i := 0; i < 200 && d.Pending() > 0; i++ {
+		time.Sleep(10 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond)
+	for _, f := range []string{partPath(path), infoPath(path), path} {
+		if _, err := os.Stat(f); err == nil {
+			t.Errorf("%s left behind", filepath.Base(f))
+		}
+	}
+}
+
+func TestPathLeavesRoomForPartFiles(t *testing.T) {
+	saved := *store.Cfg
+	t.Cleanup(func() { *store.Cfg = saved })
+	store.Cfg.DownloadFolders = true
+	store.Cfg.EpisodePattern = "{show}/{episode} {title}"
+	long := strings.Repeat("Long Title ", 40)
+	target := store.StreamTarget{Queue: &stremio.EpQueue{Show: stremio.Meta{Name: "Show"}, Season: 1,
+		Episodes: []stremio.Video{{Season: 1, Episode: 1, Title: long}}}}
+	for _, name := range []string{
+		filepath.Base(Path("/dl", target, "http://x/f.mkv")),
+		filepath.Base(LibraryPath("/dl", "pack", long+".mkv")),
+	} {
+		if n := len(name) + partRoom; n > store.MaxNameBytes {
+			t.Errorf("%d bytes with its partial files: %q", n, name)
+		}
+	}
+}
+
+func TestResumeUnknownID(t *testing.T) {
+	if New().Resume(42) {
+		t.Fatal("resumed a download that isn't there")
+	}
+}
+
+func TestScanLeavesRunningSidecar(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ep.mkv")
+	writePartInfo(path, partInfo{URL: "http://x/ep.mkv", Total: 10})
+	d := New()
+	d.items = append(d.items, &Download{ID: 1, Path: path, State: Active})
+	d.Scan(dir)
+	if _, err := os.Stat(infoPath(path)); err != nil {
+		t.Fatal("scan deleted a running download's sidecar")
 	}
 }

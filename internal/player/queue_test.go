@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"stremio-cliuwu/internal/store"
+	"stremio-cliuwu/internal/stremio"
 )
 
 func TestUpNextSlot(t *testing.T) {
@@ -80,5 +81,23 @@ func TestQueueAfterEndPlaysAtOnce(t *testing.T) {
 	p.ended = true
 	if !p.Queue(PlayRequest{VideoID: "ep2"}) || len(started) != 1 || p.Queued() != nil {
 		t.Fatalf("after the end, n should play at once: started=%v queued=%v", started, p.Queued())
+	}
+}
+
+func TestFinaleLooksAheadOnlyAcrossSeasons(t *testing.T) {
+	aired := "2020-01-01T00:00:00.000Z"
+	finale := stremio.Video{ID: "fin:1:12", Season: 1, Episode: 12, Released: aired}
+	req := PlayRequest{VideoID: finale.ID, MediaType: "series", Label: "fin",
+		Entry: store.HistoryEntry{Name: "fin", ID: "fin", Type: "series", Season: 1, Episode: 12, VideoID: finale.ID},
+		Queue: &stremio.EpQueue{Season: 1, Episodes: []stremio.Video{finale},
+			All: []stremio.Video{finale, {ID: "fin:2:1", Season: 2, Episode: 1, Released: aired}}}}
+	for _, cross := range []bool{false, true} {
+		p := New(store.Config{AutoNext: true, NextSeason: cross})
+		playing(p, req)
+		p.onProperty("duration", 1440.0)
+		p.onProperty("time-pos", 1430.0)
+		if p.prefetched != cross {
+			t.Errorf("continue into next season %v: looked ahead %v", cross, p.prefetched)
+		}
 	}
 }

@@ -473,10 +473,21 @@ func (s *streamScreen) toggleWatched() tea.Cmd {
 	return toast("marked " + t.Label + " unwatched")
 }
 
-// stepTarget is the stream target delta episodes along the queue. [, ],
-// "open next episode" and autoplay all move through it.
+// stepTarget is the stream target delta episodes along the season, for [
+// and ].
 func stepTarget(q *stremio.EpQueue, delta int) (store.StreamTarget, bool) {
 	nq, ok := q.Step(delta)
+	return queueTarget(nq, ok)
+}
+
+// nextTarget is the episode autoplay and "open next episode" move on to,
+// which can be the next season's first.
+func nextTarget(q *stremio.EpQueue) (store.StreamTarget, bool) {
+	nq, ok := q.Next(ctx.cfg.NextSeason)
+	return queueTarget(nq, ok)
+}
+
+func queueTarget(nq *stremio.EpQueue, ok bool) (store.StreamTarget, bool) {
 	if !ok {
 		return store.StreamTarget{}, false
 	}

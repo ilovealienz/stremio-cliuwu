@@ -416,7 +416,9 @@ func (p *continuePanel) episodeBlock(e store.HistoryEntry, budget int) []string 
 			out = append(out, stTitle.Render(ln))
 		}
 	}
-	out = append(out, stSub.Render(e.Name))
+	for _, ln := range strings.Split(wrap.Render(e.Name), "\n") {
+		out = append(out, stSub.Render(ln))
+	}
 
 	// Only meaningful once the fetch for this target has landed.
 	if p.epKey == targetKey(e) {

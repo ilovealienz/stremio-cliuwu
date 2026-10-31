@@ -45,3 +45,50 @@ func TestEpQueueStep(t *testing.T) {
 		t.Fatal("Upcoming should still name next season's first episode")
 	}
 }
+
+func TestEpQueueNextSeason(t *testing.T) {
+	aired, later := "2001-01-01", "2999-01-01"
+	all := []Video{
+		{ID: "sp1", Season: 0, Episode: 1, Released: aired},
+		{ID: "s1e1", Season: 1, Episode: 1, Released: aired},
+		{ID: "s1e2", Season: 1, Episode: 2, Released: aired},
+		{ID: "s3e2", Season: 3, Episode: 2, Released: aired},
+		{ID: "s3e1", Season: 3, Episode: 1, Released: aired},
+		{ID: "s3e1dup", Season: 3, Episode: 1, Released: aired},
+		{ID: "s4e1", Season: 4, Episode: 1, Released: later},
+	}
+	season := func(s, i int) *EpQueue {
+		var eps []Video
+		for _, v := range all {
+			if v.Season == s && v.ID != "s3e1" {
+				eps = append(eps, v)
+			}
+		}
+		return &EpQueue{Season: s, Episodes: eps, Index: i, All: all}
+	}
+	for _, c := range []struct {
+		name  string
+		q     *EpQueue
+		cross bool
+		want  string
+	}{
+		{"mid season", season(1, 0), true, "s1e2"},
+		{"finale, off", season(1, 1), false, ""},
+		{"finale, on", season(1, 1), true, "s3e1dup"}, // season 2 missing, duplicate dropped
+		{"premiere not out", season(3, 1), true, ""},
+		{"from specials", season(0, 0), true, ""},
+		{"nil", nil, true, ""},
+	} {
+		nq, ok := c.q.Next(c.cross)
+		got := ""
+		if ok {
+			got = nq.Episodes[nq.Index].ID
+		}
+		if got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
+		if c.name == "finale, on" && ok && (nq.Season != 3 || len(nq.Episodes) != 2 || nq.Episodes[1].ID != "s3e2" || len(nq.All) != len(all)) {
+			t.Errorf("next season queue: %+v", nq)
+		}
+	}
+}

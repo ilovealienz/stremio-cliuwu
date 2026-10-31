@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"stremio-cliuwu/internal/download"
 	"stremio-cliuwu/internal/player"
 	"stremio-cliuwu/internal/poster"
 	"stremio-cliuwu/internal/store"
@@ -513,6 +514,35 @@ func (s *settingsScreen) save() tea.Cmd {
 	return toast("saved")
 }
 
+// aria2Badge is the aria2c setting, flagging it when aria2c is missing.
+func aria2Badge(on bool) string {
+	if on && !download.Aria2Found() {
+		return bad("on · not installed")
+	}
+	return onOff(on)
+}
+
+// blockedBadge lists the first few blocked terms and how many there are.
+func blockedBadge(terms []string) string {
+	out := ""
+	for i, t := range terms {
+		if i > 0 && len(out)+len(t) > 36 {
+			return fmt.Sprintf("%s… (%d)", out, len(terms))
+		}
+		if i > 0 {
+			out += ", "
+		}
+		out += t
+	}
+	return orDash(out)
+}
+
+var mpvCmdHelp = []string{
+	"an input.conf command, like apply-profile anime or script-binding name",
+	"chain several with ;  ·  leave blank to send nothing",
+	"anime is anything opened from an anime catalog or search",
+}
+
 // prompt is the common shape: edit a value, save, rebuild.
 func (s *settingsScreen) prompt(title, placeholder, current string, set func(string) tea.Cmd, help ...string) tea.Cmd {
 	return push(newPrompt(title, placeholder, current, set, help...))
@@ -523,19 +553,44 @@ func (s *settingsScreen) rebuild() {
 
 	s.rows = []settingRow{
 		{head: "playback"},
-
-		{label: "mpv title", sub: "default is the release name, formatted is Show - S03E01",
-			badge: orDash(c.MpvTitle), act: func() tea.Cmd {
-				ctx.cfg.MpvTitle = poster.NextMpvTitle(ctx.cfg.MpvTitle)
-				return s.save()
+		{label: "subtitle language", sub: "preferred track, and where S opens",
+			badge: orDash(c.SubtitleLang), act: func() tea.Cmd {
+				help := []string{
+					"comma-separated for a preference order, e.g. eng, spa",
+					"the name works too, and regional variants fold in: en-GB is English",
+					"passed to mpv as --slang, and preselected in the S picker",
+					"",
+				}
+				help = append(help, stremio.LangReference()...)
+				return s.prompt("subtitle language", "eng, en, English", ctx.cfg.SubtitleLang,
+					func(v string) tea.Cmd {
+						ctx.cfg.SubtitleLang = v
+						return s.save()
+					}, help...)
 			}},
-
-		{label: "mpv path", badge: orDash(c.MpvPath), act: func() tea.Cmd {
-			return s.prompt("mpv path", "mpv", ctx.cfg.MpvPath, func(v string) tea.Cmd {
-				ctx.cfg.MpvPath = v
-				return s.save()
-			}, "leave blank to use `mpv` from PATH", "detected: "+orDash(store.DetectMpv()))
+		{label: "ask to resume", sub: "off always starts from the beginning", badge: onOff(c.AutoResume), act: func() tea.Cmd {
+			ctx.cfg.AutoResume = !ctx.cfg.AutoResume
+			return s.save()
 		}},
+		{label: "open next episode", sub: "show its streams when one finishes", badge: onOff(c.AutoNext), act: func() tea.Cmd {
+			ctx.cfg.AutoNext = !ctx.cfg.AutoNext
+			return s.save()
+		}},
+		{label: "autoplay", sub: "pick the next episode's stream and play it · a on a stream list", badge: onOff(c.Autoplay), act: func() tea.Cmd {
+			flipAutoplay()
+			return tea.Batch(s.save(), playerStateCmd(), autoplayChanged)
+		}},
+		{label: "continue into next season", sub: "open next episode and autoplay carry on after a finale", badge: onOff(c.NextSeason), act: func() tea.Cmd {
+			ctx.cfg.NextSeason = !ctx.cfg.NextSeason
+			return s.save()
+		}},
+		{label: "close mpv on exit", sub: "off leaves playback running after you quit", badge: onOff(c.CloseMpvOnExit), act: func() tea.Cmd {
+			ctx.cfg.CloseMpvOnExit = !ctx.cfg.CloseMpvOnExit
+			return s.save()
+		}},
+
+		{head: ""},
+		{head: "streams"},
 		{label: "preferred quality", sub: "streams matching this sort first", badge: orDash(c.PreferredQuality), act: func() tea.Cmd {
 			return s.prompt("preferred quality", "1080p", ctx.cfg.PreferredQuality, func(v string) tea.Cmd {
 				ctx.cfg.PreferredQuality = v
@@ -547,7 +602,7 @@ func (s *settingsScreen) rebuild() {
 			return s.save()
 		}},
 		{label: "blocked terms", sub: "hide streams matching these",
-			badge: orDash(strings.Join(c.Blocked, ", ")), act: func() tea.Cmd {
+			badge: blockedBadge(c.Blocked), act: func() tea.Cmd {
 				return s.prompt("blocked terms", "ai upscale, cam, telesync",
 					strings.Join(ctx.cfg.Blocked, ", "), func(v string) tea.Cmd {
 						var out []string
@@ -568,38 +623,6 @@ func (s *settingsScreen) rebuild() {
 					"  cam, camrip, hdcam, ts, telesync, hdts, tc, telecine,",
 					"  scr, screener, dvdscr, workprint, wp, pdvd")
 			}},
-		{label: "subtitle language", sub: "preferred track, and where S opens",
-			badge: orDash(c.SubtitleLang), act: func() tea.Cmd {
-				help := []string{
-					"comma-separated for a preference order, e.g. eng, spa",
-					"the name works too, and regional variants fold in: en-GB is English",
-					"passed to mpv as --slang, and preselected in the S picker",
-					"",
-				}
-				help = append(help, stremio.LangReference()...)
-
-				return s.prompt("subtitle language", "eng, en, English", ctx.cfg.SubtitleLang,
-					func(v string) tea.Cmd {
-						ctx.cfg.SubtitleLang = v
-						return s.save()
-					}, help...)
-			}},
-		{label: "ask to resume", sub: "off always starts from the beginning", badge: onOff(c.AutoResume), act: func() tea.Cmd {
-			ctx.cfg.AutoResume = !ctx.cfg.AutoResume
-			return s.save()
-		}},
-		{label: "open next episode", sub: "show its streams when one finishes", badge: onOff(c.AutoNext), act: func() tea.Cmd {
-			ctx.cfg.AutoNext = !ctx.cfg.AutoNext
-			return s.save()
-		}},
-		{label: "autoplay", sub: "pick the next episode's stream and play it · a on a stream list", badge: onOff(c.Autoplay), act: func() tea.Cmd {
-			flipAutoplay()
-			return tea.Batch(s.save(), playerStateCmd(), autoplayChanged)
-		}},
-		{label: "close mpv on exit", sub: "off leaves playback running after you quit", badge: onOff(c.CloseMpvOnExit), act: func() tea.Cmd {
-			ctx.cfg.CloseMpvOnExit = !ctx.cfg.CloseMpvOnExit
-			return s.save()
-		}},
 
 		{head: ""},
 		{head: "library"},
@@ -608,7 +631,6 @@ func (s *settingsScreen) rebuild() {
 				ctx.cfg.AutoLoadMore = !ctx.cfg.AutoLoadMore
 				return s.save()
 			}},
-
 		{label: "history size", sub: "rows on the history screen · watched state is kept forever",
 			badge: strconv.Itoa(c.HistoryMax), act: func() tea.Cmd {
 				return s.prompt("history size", "300", strconv.Itoa(ctx.cfg.HistoryMax), func(v string) tea.Cmd {
@@ -620,12 +642,6 @@ func (s *settingsScreen) rebuild() {
 					return s.save()
 				})
 			}},
-		{label: "omdb key", sub: "episode titles for imdb shows", badge: orDash(c.OmdbKey), act: func() tea.Cmd {
-			return s.prompt("omdb key", "trilogy", ctx.cfg.OmdbKey, func(v string) tea.Cmd {
-				ctx.cfg.OmdbKey = v
-				return s.save()
-			})
-		}},
 		{label: "date format", sub: "air dates and release dates",
 			badge: stSub.Render(dateSample(c.DateFormat)) + grey("  "+dateFormatName(c.DateFormat)), act: func() tea.Cmd {
 				ctx.cfg.DateFormat = nextDateFormat(ctx.cfg.DateFormat)
@@ -656,14 +672,18 @@ func (s *settingsScreen) rebuild() {
 			poster.Gen++ // force panels to redraw at the new size
 			return s.save()
 		}},
-
+		{label: "poster quality", sub: "kitty only, half-blocks always use small",
+			badge: orDash(c.PosterQuality), act: func() tea.Cmd {
+				ctx.cfg.PosterQuality = poster.NextQuality(ctx.cfg.PosterQuality)
+				poster.Gen++
+				return s.save()
+			}},
 		{label: "episode images", sub: "stills can spoil the episode",
 			badge: onOff(c.EpisodeImages), act: func() tea.Cmd {
 				ctx.cfg.EpisodeImages = !ctx.cfg.EpisodeImages
 				poster.Gen++
 				return s.save()
 			}},
-
 		{label: "preload ahead", sub: "info and posters for the next rows · ←/→ to change",
 			badge: preloadLabel(c.PreloadAhead),
 			act: func() tea.Cmd {
@@ -679,20 +699,6 @@ func (s *settingsScreen) rebuild() {
 				return s.save()
 			}},
 
-		{label: "poster quality", sub: "kitty only, half-blocks always use small",
-			badge: orDash(c.PosterQuality), act: func() tea.Cmd {
-				ctx.cfg.PosterQuality = poster.NextQuality(ctx.cfg.PosterQuality)
-				poster.Gen++
-				return s.save()
-			}},
-
-		{label: "poster protocol", sub: "how posters are drawn", badge: orDash(c.KittyMode),
-			act: func() tea.Cmd {
-				ctx.cfg.KittyMode = poster.NextKittyMode(ctx.cfg.KittyMode)
-				poster.Gen++ // redraw through whichever path now applies
-				return s.save()
-			}},
-
 		{head: ""},
 		{head: "downloads"},
 		{label: "download location", sub: "where D on a stream saves to", badge: orDash(c.DownloadDir), act: func() tea.Cmd {
@@ -705,6 +711,14 @@ func (s *settingsScreen) rebuild() {
 			ctx.cfg.DownloadFolders = !ctx.cfg.DownloadFolders
 			return s.save()
 		}},
+		{label: "use aria2c", sub: bad("4 connections per file · at your own risk, some debrid services may flag accounts for it"),
+			badge: aria2Badge(c.Aria2), act: func() tea.Cmd {
+				ctx.cfg.Aria2 = !ctx.cfg.Aria2
+				if ctx.cfg.Aria2 && !download.Aria2Found() {
+					return tea.Batch(s.save(), toastErr("aria2c isn't installed — downloads will fail until it is"))
+				}
+				return s.save()
+			}},
 		{label: "movie filename", sub: orDash(c.MoviePattern), act: func() tea.Cmd {
 			return s.prompt("movie filename", store.DefaultMoviePattern, ctx.cfg.MoviePattern, func(v string) tea.Cmd {
 				ctx.cfg.MoviePattern = v
@@ -718,6 +732,50 @@ func (s *settingsScreen) rebuild() {
 			}, "placeholders: {show} {season} {episode} {title} {year}",
 				"/ makes a folder · extension is added for you")
 		}},
+
+		{head: ""},
+		{head: "advanced"},
+		{label: "mpv path", badge: orDash(c.MpvPath), act: func() tea.Cmd {
+			return s.prompt("mpv path", "mpv", ctx.cfg.MpvPath, func(v string) tea.Cmd {
+				ctx.cfg.MpvPath = v
+				return s.save()
+			}, "leave blank to use `mpv` from PATH", "detected: "+orDash(store.DetectMpv()))
+		}},
+		{label: "mpv title", sub: "default is the release name, formatted is Show - S03E01",
+			badge: orDash(c.MpvTitle), act: func() tea.Cmd {
+				ctx.cfg.MpvTitle = poster.NextMpvTitle(ctx.cfg.MpvTitle)
+				return s.save()
+			}},
+		{label: "movie mpv command", sub: "sent to mpv once per window when a movie first plays", badge: orDash(c.MpvCmdMovie), act: func() tea.Cmd {
+			return s.prompt("movie mpv command", "apply-profile movie", ctx.cfg.MpvCmdMovie, func(v string) tea.Cmd {
+				ctx.cfg.MpvCmdMovie = strings.TrimSpace(v)
+				return s.save()
+			}, mpvCmdHelp...)
+		}},
+		{label: "show mpv command", sub: "sent to mpv once per window when a show first plays", badge: orDash(c.MpvCmdShow), act: func() tea.Cmd {
+			return s.prompt("show mpv command", "apply-profile show", ctx.cfg.MpvCmdShow, func(v string) tea.Cmd {
+				ctx.cfg.MpvCmdShow = strings.TrimSpace(v)
+				return s.save()
+			}, mpvCmdHelp...)
+		}},
+		{label: "anime mpv command", sub: "sent to mpv once per window when an anime first plays", badge: orDash(c.MpvCmdAnime), act: func() tea.Cmd {
+			return s.prompt("anime mpv command", "script-binding anime-profile", ctx.cfg.MpvCmdAnime, func(v string) tea.Cmd {
+				ctx.cfg.MpvCmdAnime = strings.TrimSpace(v)
+				return s.save()
+			}, mpvCmdHelp...)
+		}},
+		{label: "omdb key", sub: "episode titles for imdb shows", badge: orDash(c.OmdbKey), act: func() tea.Cmd {
+			return s.prompt("omdb key", "trilogy", ctx.cfg.OmdbKey, func(v string) tea.Cmd {
+				ctx.cfg.OmdbKey = v
+				return s.save()
+			})
+		}},
+		{label: "poster protocol", sub: "how posters are drawn", badge: orDash(c.KittyMode),
+			act: func() tea.Cmd {
+				ctx.cfg.KittyMode = poster.NextKittyMode(ctx.cfg.KittyMode)
+				poster.Gen++ // redraw through whichever path now applies
+				return s.save()
+			}},
 	}
 
 	items := make([]Item, len(s.rows))

@@ -176,6 +176,8 @@ type Player struct {
 	historied  bool         // written to history; waits until the file proves not to be a status clip
 	clip       bool         // the file was found to be a status clip
 	seekTo     float64      // pending resume seek, applied on file-loaded
+	restarted  bool         // playback has started on the current file
+	kindSent   bool         // the kind's mpv command has gone to this mpv window
 	lastSave   time.Time    // throttles history writes
 	lastEmit   int          // last whole second pushed to the UI
 
@@ -197,6 +199,11 @@ func New(cfg store.Config) *Player {
 func (p *Player) Attach(prog *tea.Program) { p.prog = prog }
 
 func (p *Player) SetConfig(cfg store.Config) { p.mu.Lock(); p.cfg = cfg; p.mu.Unlock() }
+
+func hasNext(q *stremio.EpQueue, cfg store.Config) bool {
+	_, ok := q.Next(cfg.NextSeason)
+	return ok
+}
 
 func (p *Player) emit(msg tea.Msg) {
 	if p.prog != nil {
@@ -348,6 +355,7 @@ func (p *Player) connect() error {
 	p.mu.Lock()
 	p.conn = c
 	p.state.Alive = true
+	p.kindSent = false
 	p.mu.Unlock()
 
 	go p.readLoop(c)
@@ -581,6 +589,12 @@ func (p *Player) dispatch(m map[string]any) {
 		p.onProperty(name, m["data"])
 	case "file-loaded":
 		p.onFileLoaded()
+	case "playback-restart":
+		p.mu.Lock()
+		p.restarted = !p.replacing
+		cmd := p.takeKindCommand()
+		p.mu.Unlock()
+		p.sendKindCommand(cmd)
 	case "end-file":
 		reason, _ := m["reason"].(string)
 		p.onEndFile(reason)
@@ -615,6 +629,7 @@ func (p *Player) onProperty(name string, data any) {
 		p.markErrorClip()
 	}
 	addHist := p.takeHistory()
+	kindCmd := p.takeKindCommand()
 	histMax := p.cfg.HistoryMax
 	st := p.state
 	now := p.now
@@ -628,7 +643,7 @@ func (p *Player) onProperty(name string, data any) {
 	// Look ahead once we're far enough in.
 	prefetch := false
 	if now != nil && !p.prefetched && (p.cfg.AutoNext || p.cfg.Autoplay) &&
-		now.Queue.HasNext() && st.Duration > 0 && !st.ErrorClip &&
+		hasNext(now.Queue, p.cfg) && st.Duration > 0 && !st.ErrorClip &&
 		st.Duration-st.Pos <= store.PrefetchLead(st.Duration) {
 		p.prefetched = true
 		prefetch = true
@@ -646,6 +661,7 @@ func (p *Player) onProperty(name string, data any) {
 	if addHist {
 		store.AddHistory(now.Entry, histMax)
 	}
+	p.sendKindCommand(kindCmd)
 	if save {
 		go record(now, st)
 	}
@@ -655,6 +671,57 @@ func (p *Player) onProperty(name string, data any) {
 	if repaint {
 		p.emit(StateMsg{State: st})
 	}
+}
+
+// kindCommand is the setting's mpv command for what req is: anime, a movie
+// or a show.
+func kindCommand(req *PlayRequest, cfg store.Config) string {
+	var cmd string
+	switch {
+	case req == nil:
+	case req.Entry.Source == "anime":
+		cmd = cfg.MpvCmdAnime
+	case req.MediaType == "movie":
+		cmd = cfg.MpvCmdMovie
+	case req.MediaType == "series":
+		cmd = cfg.MpvCmdShow
+	}
+	cmd = strings.TrimSpace(strings.NewReplacer("\r", " ", "\n", " ").Replace(cmd))
+	if strings.HasPrefix(cmd, "{") {
+		return "" // mpv would read it as JSON
+	}
+	return cmd
+}
+
+// takeKindCommand returns the kind's mpv command once per mpv window, when
+// the first real file starts playing: after an error clip, and with the
+// video size known. Callers hold the lock.
+func (p *Player) takeKindCommand() string {
+	if p.kindSent || !p.restarted || p.replacing || p.state.Duration <= 0 || p.state.ErrorClip {
+		return ""
+	}
+	cmd := kindCommand(p.now, p.cfg)
+	if cmd != "" {
+		p.kindSent = true
+	}
+	return cmd
+}
+
+// sendKindCommand writes cmd as an input.conf line, which mpv runs without
+// a reply.
+func (p *Player) sendKindCommand(cmd string) {
+	if cmd == "" {
+		return
+	}
+	p.mu.Lock()
+	c := p.conn
+	p.mu.Unlock()
+	if c == nil {
+		return
+	}
+	p.wmu.Lock()
+	c.Write([]byte(cmd + "\n"))
+	p.wmu.Unlock()
 }
 
 // takeHistory reports whether the playing file should be written to history
@@ -718,7 +785,8 @@ func (p *Player) onEndFile(reason string) {
 	}
 	now := p.now
 	st := p.state
-	autoNext := p.cfg.AutoNext || p.cfg.Autoplay
+	cfg := p.cfg
+	autoNext := cfg.AutoNext || cfg.Autoplay
 	prefetched := p.prefetched
 	queued := p.queued
 	p.mu.Unlock()
@@ -772,7 +840,7 @@ func (p *Player) onEndFile(reason string) {
 			return
 		}
 
-		if autoNext && now.Queue.HasNext() && !prefetched {
+		if autoNext && hasNext(now.Queue, cfg) && !prefetched {
 			p.emit(EpisodeEndedMsg{Prev: *now})
 			return
 		}
@@ -850,6 +918,7 @@ func (p *Player) play(req PlayRequest) tea.Msg {
 	p.prefetched = false
 	p.historied = false
 	p.clip = false
+	p.restarted = false
 	p.queued = nil // choosing something now supersedes whatever was lined up
 	p.noAuto = false
 	p.ended = false

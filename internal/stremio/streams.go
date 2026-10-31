@@ -254,6 +254,13 @@ func ReleaseName(s Stream) string {
 	return StripInvis(s.Name)
 }
 
+// NamesFile reports whether a release name is a video file's name, rather
+// than a pack's that several episodes share.
+func NamesFile(name string) bool {
+	loadRx()
+	return rx.ext.MatchString(name)
+}
+
 // notNameStart skips leading emoji and symbols, keeping an anime "[Group]".
 func notNameStart(r rune) bool {
 	return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '['

@@ -24,6 +24,7 @@ type Config struct {
 	OmdbKey        string   `json:"omdb_key"`
 	AutoNext       bool     `json:"auto_next"`
 	Autoplay       bool     `json:"autoplay"`
+	NextSeason     bool     `json:"next_season"`
 	AutoResume     bool     `json:"auto_resume"`
 	CloseMpvOnExit bool     `json:"close_mpv_on_exit"`
 	CachedFirst    bool     `json:"cached_first"`
@@ -53,12 +54,18 @@ type Config struct {
 	DownloadFolders bool   `json:"download_folders"`
 	MoviePattern    string `json:"movie_pattern"`
 	EpisodePattern  string `json:"episode_pattern"`
+	Aria2           bool   `json:"aria2,omitempty"`
 
 	// What mpv shows as the title. "default" leaves mpv to work it out from
 	// the url, "formatted" uses the built-in forms, anything else is a
 	// pattern using the same placeholders as the download filenames.
 	MpvTitle   string `json:"mpv_title"`
 	DateFormat string `json:"date_format"`
+
+	// mpv commands sent once per mpv window when one of these first plays.
+	MpvCmdMovie string `json:"mpv_cmd_movie,omitempty"`
+	MpvCmdShow  string `json:"mpv_cmd_show,omitempty"`
+	MpvCmdAnime string `json:"mpv_cmd_anime,omitempty"`
 }
 
 // SetDefaults fills in anything missing. Returns true if it changed something,

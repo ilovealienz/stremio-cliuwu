@@ -7,6 +7,7 @@
   "omdb_key": "trilogy",
   "auto_next": true,
   "autoplay": false,
+  "next_season": false,
   "auto_resume": true,
   "close_mpv_on_exit": true,
   "cached_first": true,

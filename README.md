@@ -33,7 +33,8 @@ Two things to set up, both take a minute.
 
 ### 1. Point it at mpv
 
-Open **settings** (press `c` from the main menu) and check the **mpv path**.
+Open **settings** (press `c` from the main menu) and check **mpv path**, under
+**advanced** at the bottom.
 
 Most of the time it'll have found mpv already and you can ignore this. If it
 says `—` or you get "mpv not found", set it manually:
@@ -143,6 +144,13 @@ that setting takes a list, so `eng, en, English` all count as English.
 **`D` downloads a stream.** One at a time, resumable, into a folder layout you
 can change in settings. Progress shows at the bottom wherever you are. On the
 downloads screen `x` stops one and `enter` picks it back up, `D` deletes it.
+With [aria2](https://aria2.github.io) installed, **use aria2c** under downloads
+in settings fetches over 4 connections at once. It's off by default and at your
+own risk: some debrid services limit connections and may flag accounts.
+
+**mpv commands for movies, shows and anime.** Settings has one for each, sent
+to mpv once per window when that kind first plays, like `apply-profile anime`
+or `script-binding name` for a script of yours.
 
 ## Autoplay
 
@@ -152,8 +160,9 @@ group, `2160p` or `dual`, then pick a stream. The filter and the addon tab
 carry over to the next episode, and autoplay plays the closest match there: the
 same language and audio, then the same quality and group where it can.
 
-It stops at the end of a season, and if nothing in the filtered list fits, it
-opens the list for you to choose.
+It stops at the end of a season unless **continue into next season** is on in
+settings. If nothing in the filtered list fits, it opens the list for you to
+choose.
 
 ## Heads up
 

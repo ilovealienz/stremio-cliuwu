@@ -69,3 +69,28 @@ func TestAutoFetchPatientRetriesFailedAddons(t *testing.T) {
 		}
 	}
 }
+
+func TestAutoFetchCrossesSeasonsWhenOn(t *testing.T) {
+	savedTransport, savedCtx := stremio.HTTPClient.Transport, ctx
+	t.Cleanup(func() { stremio.HTTPClient.Transport, ctx = savedTransport, savedCtx; stremio.ClearStreams() })
+	stremio.HTTPClient.Transport = &onceDown{}
+	aired := "2020-01-01T00:00:00.000Z"
+	fin := stremio.Video{ID: "tt8:1:12", Season: 1, Episode: 12, Released: aired}
+	prev := player.PlayRequest{Queue: &stremio.EpQueue{Season: 1, Episodes: []stremio.Video{fin},
+		All: []stremio.Video{fin, {ID: "tt8:2:1", Season: 2, Episode: 1, Released: aired}}}}
+	addon := stremio.Addon{TransportURL: "http://good.test/manifest.json",
+		Manifest: stremio.Manifest{Name: "good", Resources: []any{"stream"}}}
+
+	for _, cross := range []bool{false, true} {
+		ctx = &appCtx{cfg: &store.Config{NextSeason: cross}, player: player.New(store.Config{}), addons: []stremio.Addon{addon}}
+		cmd := autoFetch(prev, false)
+		if (cmd != nil) != cross {
+			t.Fatalf("cross=%v: fetch started %v", cross, cmd != nil)
+		}
+		if cross {
+			if m := cmd().(autoPickMsg); !m.ok || m.target.VideoID != "tt8:2:1" {
+				t.Errorf("picked %q for %q", m.pick.Name, m.target.VideoID)
+			}
+		}
+	}
+}

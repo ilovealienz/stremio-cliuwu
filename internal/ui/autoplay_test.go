@@ -372,3 +372,37 @@ func TestPickStreamKeepsDualAudio(t *testing.T) {
 		}
 	}
 }
+
+func TestPickStreamGroupStaysCached(t *testing.T) {
+	aired := "2020-01-01T00:00:00.000Z"
+	q := &stremio.EpQueue{Season: 1, Episodes: []stremio.Video{
+		{ID: "a", Season: 1, Episode: 1, Released: aired}, {ID: "b", Season: 1, Episode: 2, Released: aired}}}
+	mk := func(name, group, f string) stremio.Stream {
+		st := stream("A", name, group)
+		st.BehaviorHints.Filename = f
+		return st
+	}
+	same := mk("same ⏳", "g", "Show S01E02 1080p AMZN WEB-DL DDP5 1 H 264-NTb.mkv")
+	other := mk("other ⚡", "h", "Show S01E02 1080p WEB-DL x264-OTHER.mkv")
+	prev := player.PlayRequest{Queue: q, BingeGroup: "g", Release: "Show S01E01 1080p AMZN WEB-DL DDP5 1 H 264-NTb.mkv"}
+	if st, _ := pickStream([]stremio.Stream{same, other}, prev, store.Config{CachedFirst: true}); st.Name != "other ⚡" {
+		t.Fatalf("picked the uncached binge group stream: %q", st.Name)
+	}
+	sameCached := mk("same ⚡", "g", "Show S01E02 1080p AMZN WEB-DL DDP5 1 H 264-NTb.mkv")
+	if st, _ := pickStream([]stremio.Stream{other, sameCached}, prev, store.Config{CachedFirst: true}); st.Name != "same ⚡" {
+		t.Fatalf("binge group lost to list order: %q", st.Name)
+	}
+}
+
+func TestPickStreamIgnoresNextSeasonTitle(t *testing.T) {
+	aired := "2020-01-01T00:00:00.000Z"
+	fin := stremio.Video{ID: "a", Season: 1, Episode: 12, Title: "Finale", Released: aired}
+	q := &stremio.EpQueue{Season: 1, Episodes: []stremio.Video{fin},
+		All: []stremio.Video{fin, {ID: "b", Season: 2, Episode: 1, Title: "Dubbed", Released: aired}}}
+	next := stream("A", "1080p", "")
+	next.BehaviorHints.Filename = "Show S02E01 Dubbed 1080p AMZN WEB-DL DDP5 1 H 264-NTb.mkv"
+	prev := player.PlayRequest{Queue: q, Release: "Show S01E12 Finale 1080p AMZN WEB-DL DDP5 1 H 264-NTb.mkv"}
+	if _, ok := pickStream([]stremio.Stream{next}, prev, store.Config{NextSeason: true}); !ok {
+		t.Fatal("a season premiere titled Dubbed stopped autoplay")
+	}
+}

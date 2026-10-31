@@ -431,7 +431,7 @@ func (a *app) next(prev player.PlayRequest, patient bool) tea.Cmd {
 // elsewhere the streams are fetched in the background instead, so they're
 // warm when you do go looking, and the menu's "next up" entry points at them.
 func (a *app) advanceTo(prev player.PlayRequest, prefix string) tea.Cmd {
-	t, ok := stepTarget(prev.Queue, 1)
+	t, ok := nextTarget(prev.Queue)
 	if !ok {
 		return toast("finished — " + prev.Label)
 	}
@@ -444,8 +444,7 @@ func (a *app) advanceTo(prev player.PlayRequest, prefix string) tea.Cmd {
 	}
 
 	addons := ctx.StreamAddons()
-	videoID := t.VideoID
-	go stremio.GetStreams(addons, "series", videoID) // warm the cache, don't navigate
+	go stremio.GetStreams(addons, t.MediaType, t.FetchID()) // warm the cache, don't navigate
 
 	return toast(prefix + t.Label + " · ready when you are")
 }
