@@ -1,18 +1,18 @@
 # stremio-cliuwu
 
-A terminal Stremio client. Browse your addons' catalogs, pick a stream, and it
-plays in mpv. Keeps track of what you've watched and where you got to.
-
-[![Watch the demo](preview/screenshot.png)](https://o3o.lol/PfG3bI.mp4)
-
-CLICK SCREENSHOT FOR VIDEO DEMO
-
 > **Updating from before v0.6.8?** Your addons, favourites and history moved out
 > of `~/.config`. Run this once:
 >
 > ```
 > mkdir -p ~/.local/share/stremio-cliuwu ~/.local/state/stremio-cliuwu && mv ~/.config/stremio-cliuwu/{addons,favourites}.json ~/.local/share/stremio-cliuwu/ ; mv ~/.config/stremio-cliuwu/{history,downloads}.json ~/.local/state/stremio-cliuwu/
 > ```
+
+A terminal Stremio client. Browse your addons' catalogs, pick a stream, and it
+plays in mpv. Keeps track of what you've watched and where you got to.
+
+[![Watch the demo](preview/screenshot.png)](https://o3o.lol/PfG3bI.mp4)
+
+CLICK SCREENSHOT FOR VIDEO DEMO
 
 ## Install
 
