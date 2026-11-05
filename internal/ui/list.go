@@ -431,7 +431,7 @@ func (l *listModel) View() string {
 		if l.query != "" && len(l.items) > 0 {
 			empty = "nothing matches the filter"
 		}
-		b.WriteString(stHint.Render("  " + empty))
+		b.WriteString(ellipsize(stHint.Render("  "+empty), l.w-1))
 		for i := 1; i < l.rows(); i++ {
 			b.WriteString("\n")
 		}
@@ -492,7 +492,7 @@ func (l *listModel) row(vi int, selected bool) string {
 		if l.Numbered {
 			pad = "    " // keep section labels aligned with the number column
 		}
-		return " " + pad + stSection.Render(it.Label)
+		return ellipsize(" "+pad+stSection.Render(it.Label), l.w-1)
 	}
 
 	marker := "  "

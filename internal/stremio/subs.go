@@ -58,7 +58,7 @@ type SubsQuery struct {
 
 	// All three come from the stream's behaviorHints, and all three are
 	// extras the protocol defines for this request — stremio-core names them
-	// videoHash, videoSize and videoFilename. The more of them an addon
+	// videoHash, videoSize and filename. The more of them an addon
 	// gets, the better it can pick out subtitles cut for this exact release.
 	Hash     string
 	Size     int64

@@ -31,6 +31,7 @@ var HTTPClient = &http.Client{
 		}).DialContext,
 		ForceAttemptHTTP2:   true,
 		TLSHandshakeTimeout: 10 * time.Second,
+		IdleConnTimeout:     90 * time.Second, // unset kept every addon's connection open all session
 	},
 }
 

@@ -171,12 +171,24 @@ func TestPickStreamWontAutoplayOtherVariant(t *testing.T) {
 
 func TestAutoplayTag(t *testing.T) {
 	newTestStreamScreen(t)
-	a := &app{}
+	a := &app{stack: []screen{&menuScreen{}}}
 	now := time.Now()
 
 	ctx.cfg.Autoplay = true
+	if got := a.autoplayTag(now); got != "" {
+		t.Fatalf("on but on the home screen: %q", stripANSI(got))
+	}
+	a.pstate = player.State{Alive: true, QueueLen: 12}
 	if got := stripANSI(a.autoplayTag(now)); got != "[AUTOPLAY ON]" {
-		t.Fatalf("on: %q", got)
+		t.Fatalf("on while a show plays: %q", got)
+	}
+	a.pstate = player.State{Alive: true}
+	if got := a.autoplayTag(now); got != "" {
+		t.Fatalf("on while a movie plays: %q", stripANSI(got))
+	}
+	a.stack = append(a.stack, &episodeScreen{})
+	if got := stripANSI(a.autoplayTag(now)); got != "[AUTOPLAY ON]" {
+		t.Fatalf("on, on the episode list: %q", got)
 	}
 	ctx.cfg.Autoplay = false
 	if got := a.autoplayTag(now); got != "" {

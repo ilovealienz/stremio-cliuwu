@@ -11,7 +11,6 @@ require (
 	github.com/muesli/termenv v0.15.2
 	golang.org/x/image v0.18.0
 	golang.org/x/sys v0.27.0
-	golang.org/x/term v0.15.0
 )
 
 require (

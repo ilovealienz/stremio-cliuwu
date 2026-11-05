@@ -46,6 +46,8 @@ func TestTypeMismatchKeepsTheRest(t *testing.T) {
 	for _, v := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "APPDATA"} {
 		t.Setenv(v, dir)
 	}
+	saved := CfgNow()
+	defer UseConfig(saved) // LoadConfig replaces the snapshot
 	path := CfgFile()
 	os.MkdirAll(filepath.Dir(path), 0755)
 	os.WriteFile(path, []byte(`{"mpv_path": "/opt/mpv", "posters": "yes"}`), 0644)

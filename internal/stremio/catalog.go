@@ -530,10 +530,10 @@ func GetSeasonEpisodes(m Meta, season int, sm SeriesMeta, omdbKey string) []Vide
 			for _, e := range resp.Episodes {
 				n := 0
 				fmt.Sscanf(e.Episode, "%d", &n)
-				if n <= 0 {
-					continue
+				v, ok := byEp[n]
+				if !ok {
+					continue // not on the addon, so nothing to play
 				}
-				v := byEp[n]
 				if e.Title != "" && e.Title != "N/A" {
 					v.Title = e.Title
 				}

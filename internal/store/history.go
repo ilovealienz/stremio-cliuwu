@@ -36,8 +36,8 @@ const (
 // recentLimit is how many entries the history screen keeps. Watched state is
 // unbounded and lives separately — this only caps the list you browse.
 func recentLimit() int {
-	if Cfg.HistoryMax > 0 {
-		return Cfg.HistoryMax
+	if m := CfgNow().HistoryMax; m > 0 {
+		return m
 	}
 	return defaultRecent
 }

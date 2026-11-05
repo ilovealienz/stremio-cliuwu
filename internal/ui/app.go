@@ -122,8 +122,6 @@ func push(s screen) tea.Cmd { return func() tea.Msg { return pushMsg{s} } }
 
 func pop() tea.Cmd { return func() tea.Msg { return popMsg{1} } }
 
-func popN(n int) tea.Cmd { return func() tea.Msg { return popMsg{n} } }
-
 func popRoot() tea.Cmd { return func() tea.Msg { return popRootMsg{} } }
 
 func replaceTop(s screen) tea.Cmd { return func() tea.Msg { return replaceMsg{s} } }

@@ -539,9 +539,16 @@ func blockedBadge(terms []string) string {
 }
 
 var mpvCmdHelp = []string{
-	"an input.conf command, like apply-profile anime or script-binding name",
+	"sent once per mpv window, when the first file plays:",
+	"  anime  anything opened from an anime catalog or search",
+	"  movie  any other movie",
+	"  show   any other series",
+	"",
+	"any input.conf command works, for example:",
+	"  apply-profile anime      a profile from your mpv.conf",
+	"  script-binding name      a script's keybind",
+	"  set sub-scale 1.2        any property",
 	"chain several with ;  ·  leave blank to send nothing",
-	"anime is anything opened from an anime catalog or search",
 }
 
 // prompt is the common shape: edit a value, save, rebuild.

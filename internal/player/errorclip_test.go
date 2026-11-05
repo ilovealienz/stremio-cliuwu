@@ -14,7 +14,8 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	for _, v := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"} {
+	// The runtime dir holds mpv's socket: no test may reach a real one.
+	for _, v := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR"} {
 		os.Setenv(v, dir)
 	}
 	os.Setenv("APPDATA", dir)

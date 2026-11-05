@@ -526,7 +526,7 @@ func (s *fileListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			s.list.ClearNum()
 
 			req := s.request(s.rows[i].idx)
-			return s, tea.Batch(ctx.player.Play(req), toast("loading "+req.Label+"…"))
+			return s, tea.Sequence(toast("loading "+req.Label+"…"), ctx.player.Play(req))
 		case "n":
 			if i := s.list.Selected(); i >= 0 && i < len(s.rows) && !s.rows[i].dir {
 				return s, s.queueNext(s.rows[i].idx)

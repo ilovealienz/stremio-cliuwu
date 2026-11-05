@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"github.com/charmbracelet/lipgloss"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
@@ -230,8 +231,15 @@ func (s *confirmScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 func (s *confirmScreen) View() string {
 	yes, no := s.labels()
 
-	line := "  " + stTitle.Render(s.message) + "   " + s.prompt()
-	detail := "  " + stHint.Render("y = "+yes+"     n = "+no)
+	line := stTitle.Render(s.message) + "   " + s.prompt()
+	detail := stHint.Render("y = " + yes + "     n = " + no)
+	return s.fit(line) + "\n\n" + s.fit(detail)
+}
 
-	return line + "\n\n" + detail
+// fit wraps text to the screen, indented two cells.
+func (s *confirmScreen) fit(text string) string {
+	if s.w > 12 {
+		text = lipgloss.NewStyle().Width(s.w - 2).Render(text)
+	}
+	return "  " + strings.ReplaceAll(text, "\n", "\n  ")
 }

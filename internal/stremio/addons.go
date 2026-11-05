@@ -126,6 +126,12 @@ func FetchAddon(manifestURL string) Addon {
 		a.Err = err
 		return a
 	}
+	// Valid JSON that isn't a manifest, like an addon's {"error": ...} for a
+	// bad key, would otherwise load as an addon that offers nothing.
+	if m := a.Manifest; m.ID == "" && m.Name == "" && len(m.Resources) == 0 && len(m.Catalogs) == 0 {
+		a.Err = errors.New("not an addon manifest")
+		return a
+	}
 	if a.Manifest.Name == "" {
 		a.Manifest.Name = addonLabel(a)
 	}

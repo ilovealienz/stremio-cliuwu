@@ -77,3 +77,22 @@ func TestFetchEdgeCases(t *testing.T) {
 		t.Fatal("html page saved as the video")
 	}
 }
+
+// A server that never sends a size: the finished download still has one.
+func TestFetchUnknownSize(t *testing.T) {
+	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(bytes.Repeat([]byte("v"), 3000))
+		w.(http.Flusher).Flush() // chunked, so no Content-Length
+		w.Write(bytes.Repeat([]byte("v"), 3000))
+	}))
+	defer srv.Close()
+
+	dl := &Download{ID: 1, URL: srv.URL + "/ep", Path: filepath.Join(t.TempDir(), "ep.mkv")}
+	if err := New().fetch(dl); err != nil {
+		t.Fatal(err)
+	}
+	if dl.Done != 6000 || dl.Total != 6000 {
+		t.Fatalf("done %d of %d, want 6000 of 6000", dl.Done, dl.Total)
+	}
+}

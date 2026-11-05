@@ -1,13 +1,11 @@
 package ui
 
 import (
-	"os"
 	"strconv"
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"golang.org/x/term"
 )
 
 // ── Raw ANSI helpers ──────────────────────────────────────────────────────────
@@ -23,10 +21,8 @@ const (
 	cGreen   = "\033[92m"
 	cYellow  = "\033[93m"
 	cCyan    = "\033[96m"
-	cWhite   = "\033[97m"
 	cGrey    = "\033[90m"
 	cMagenta = "\033[95m"
-	cBlue    = "\033[94m"
 )
 
 func bold(s string) string { return cBold + s + cReset }
@@ -41,11 +37,7 @@ func hi(s string) string { return cCyan + s + cReset }
 
 func accent(s string) string { return stAccentText.Render(s) }
 
-func white(s string) string { return cWhite + s + cReset }
-
 func yell(s string) string { return cYellow + s + cReset }
-
-func blue(s string) string { return cBlue + s + cReset }
 
 // stripANSI removes escape sequences so we can match/measure raw text.
 func stripANSI(s string) string {
@@ -63,15 +55,6 @@ func stripANSI(s string) string {
 		i++
 	}
 	return b.String()
-}
-
-// tw is the current terminal width. streams.go uses it to size labels.
-func tw() int {
-	w, _, err := term.GetSize(int(os.Stdout.Fd()))
-	if err != nil || w < 20 {
-		return 80
-	}
-	return w
 }
 
 // ── lipgloss ──────────────────────────────────────────────────────────────────

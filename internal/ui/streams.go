@@ -421,7 +421,7 @@ func (s *streamScreen) play(st stremio.Stream) tea.Cmd {
 	s.target.Resume = s.savedResume()
 	resume := s.target.Resume
 	if !ctx.cfg.AutoResume || resume <= 5 {
-		return tea.Batch(s.launch(st, 0), toast("loading "+s.target.Label+"…"))
+		return tea.Sequence(toast("loading "+s.target.Label+"…"), s.launch(st, 0))
 	}
 
 	return push(newChoice(
@@ -429,10 +429,10 @@ func (s *streamScreen) play(st stremio.Stream) tea.Cmd {
 		"resume "+s.target.Label+" from "+download.FmtSecs(resume)+"?",
 		"resume", "start over",
 		func() tea.Cmd {
-			return tea.Batch(s.launch(st, resume), toast("resuming at "+download.FmtSecs(resume)))
+			return tea.Sequence(toast("resuming at "+download.FmtSecs(resume)), s.launch(st, resume))
 		},
 		func() tea.Cmd {
-			return tea.Batch(s.launch(st, 0), toast("starting over"))
+			return tea.Sequence(toast("starting over"), s.launch(st, 0))
 		},
 	))
 }

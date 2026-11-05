@@ -109,7 +109,9 @@ func TestHistoryRoundTrip(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", dir)
 	t.Setenv("XDG_STATE_HOME", dir)
 	t.Setenv("APPDATA", dir)
+	old := hist
 	hist = &historyStore{}
+	defer func() { hist = old }()
 
 	AddHistory(HistoryEntry{Name: "Film", ID: "tt1", Type: "movie", VideoID: "tt1", Year: "2010"}, 300)
 	UpdatePosition("tt1", 600, 6000)

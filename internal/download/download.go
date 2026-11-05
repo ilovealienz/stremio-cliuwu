@@ -39,6 +39,7 @@ var downloadClient = &http.Client{
 		TLSHandshakeTimeout:   15 * time.Second,
 		ResponseHeaderTimeout: 60 * time.Second,
 		ForceAttemptHTTP2:     true,
+		IdleConnTimeout:       90 * time.Second,
 	},
 }
 
@@ -154,7 +155,7 @@ func readPartInfo(final string) (partInfo, bool) {
 // .part invisible on disk with nothing to clean it up.
 func writePartInfo(final string, pi partInfo) {
 	if b, err := json.Marshal(pi); err == nil {
-		store.WriteAtomic(infoPath(final), b, 0644)
+		store.WriteAtomic(infoPath(final), b, 0600) // the URL can carry a debrid key
 	}
 }
 
@@ -353,7 +354,7 @@ func (d *Downloader) save() {
 	d.mu.Unlock()
 
 	if b, err := json.Marshal(idx); err == nil {
-		store.WriteAtomic(store.DownloadsFile(), b, 0644)
+		store.WriteAtomic(store.DownloadsFile(), b, 0600)
 	}
 }
 
@@ -900,6 +901,9 @@ func (d *Downloader) fetch(dl *Download) error {
 	// so it couldn't be resumed either.
 	d.mu.Lock()
 	got, want := dl.Done, dl.Total
+	if want == 0 {
+		dl.Total = got // the server never said, so it showed as 0 B
+	}
 	d.mu.Unlock()
 	if want > 0 && got < want {
 		return fmt.Errorf("connection ended early at %s of %s — enter to resume",

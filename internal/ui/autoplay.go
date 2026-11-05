@@ -325,14 +325,26 @@ func autoplayChanged() tea.Msg { return autoplayChangedMsg{} }
 // autoOffShown is how long [AUTOPLAY OFF] stays up after turning it off.
 const autoOffShown = 3 * time.Second
 
-// autoplayTag is the footer's autoplay state: always while on, briefly after
-// turning it off.
+// autoplayTag is the footer's autoplay state: while on, on the screens it
+// applies to or while a show plays; briefly after turning it off.
 func (a *app) autoplayTag(now time.Time) string {
 	switch {
-	case ctx.cfg.Autoplay:
+	case ctx.cfg.Autoplay && (a.onShowScreen() || a.pstate.Alive && a.pstate.QueueLen > 0):
 		return good("[AUTOPLAY ON]")
 	case !a.autoOffAt.IsZero() && now.Sub(a.autoOffAt) < autoOffShown:
 		return bad("[AUTOPLAY OFF]")
 	}
 	return ""
+}
+
+// onShowScreen is whether the top screen is one autoplay applies to.
+func (a *app) onShowScreen() bool {
+	if len(a.stack) == 0 {
+		return false
+	}
+	switch a.top().(type) {
+	case *streamScreen, *seasonScreen, *episodeScreen, *specialsScreen:
+		return true
+	}
+	return false
 }

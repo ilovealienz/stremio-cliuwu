@@ -164,14 +164,21 @@ func TestRemoveWhileActiveLeavesNothing(t *testing.T) {
 	d.Remove(d.Snapshot()[0].ID)
 	close(gate)
 
-	for i := 0; i < 200 && d.Pending() > 0; i++ {
-		time.Sleep(10 * time.Millisecond)
-	}
-	time.Sleep(50 * time.Millisecond)
-	for _, f := range []string{partPath(path), infoPath(path), path} {
-		if _, err := os.Stat(f); err == nil {
-			t.Errorf("%s left behind", filepath.Base(f))
+	// The row goes at once; the worker deletes the files once it has stopped.
+	leftover := func() []string {
+		var out []string
+		for _, f := range []string{partPath(path), infoPath(path), path} {
+			if _, err := os.Stat(f); err == nil {
+				out = append(out, filepath.Base(f))
+			}
 		}
+		return out
+	}
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end) && len(leftover()) > 0; {
+		time.Sleep(20 * time.Millisecond)
+	}
+	if l := leftover(); len(l) > 0 {
+		t.Errorf("left behind: %v", l)
 	}
 }
 

@@ -216,13 +216,15 @@ func TestAria2RemoveWhileActive(t *testing.T) {
 	d.Add("ep", fs.URL+"/files/ep.mkv", path)
 	waitFor(t, "progress", func() bool { dl := only(d); return dl.State == Active && dl.Frac() > 0.2 })
 	d.Remove(only(d).ID)
-	waitFor(t, "worker to finish", func() bool { return d.Pending() == 0 })
-	time.Sleep(200 * time.Millisecond)
-	for _, f := range []string{partPath(path), infoPath(path), controlPath(path), path} {
-		if _, err := os.Stat(f); err == nil {
-			t.Errorf("%s left behind", filepath.Base(f))
+	// The row goes at once; the worker deletes the files once aria2c stops.
+	waitFor(t, "files to be deleted", func() bool {
+		for _, f := range []string{partPath(path), infoPath(path), controlPath(path), path} {
+			if _, err := os.Stat(f); err == nil {
+				return false
+			}
 		}
-	}
+		return true
+	})
 }
 
 func TestAria2ExpiredLink(t *testing.T) {
