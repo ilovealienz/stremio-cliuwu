@@ -1,18 +1,12 @@
 package store
 
-import (
-	"encoding/json"
-	"os"
-	"time"
-)
+import "time"
 
 func LoadFavs() FavouriteList {
-	b, err := os.ReadFile(favsFile())
-	if err != nil {
+	var fl FavouriteList
+	if readJSON(favsFile(), &fl) != nil {
 		return FavouriteList{}
 	}
-	var fl FavouriteList
-	json.Unmarshal(b, &fl)
 	return fl
 }
 

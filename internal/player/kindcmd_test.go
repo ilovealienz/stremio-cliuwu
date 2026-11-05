@@ -59,3 +59,15 @@ func TestKindCommandOncePerWindow(t *testing.T) {
 	p.kindSent = false // what connect does for a new mpv
 	step("new window", func() { p.dispatch(map[string]any{"event": "playback-restart"}) }, true)
 }
+
+func TestLangList(t *testing.T) {
+	for in, want := range map[string]string{
+		"eng, en, English": "eng,en,English",
+		" jpn ,eng,, ":     "jpn,eng",
+		"":                 "",
+	} {
+		if got := langList(in); got != want {
+			t.Errorf("langList(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

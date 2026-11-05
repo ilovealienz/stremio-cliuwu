@@ -79,9 +79,11 @@ func aria2Setup(t *testing.T) (*Downloader, string) {
 	if !Aria2Found() {
 		t.Skip("aria2c not installed")
 	}
-	saved := *store.Cfg
-	store.Cfg.Aria2 = true
-	t.Cleanup(func() { *store.Cfg = saved })
+	saved := store.CfgNow()
+	on := saved
+	on.Aria2 = true
+	store.UseConfig(on)
+	t.Cleanup(func() { store.UseConfig(saved) })
 	t.Setenv("XDG_STATE_HOME", t.TempDir())
 	return New(), filepath.Join(t.TempDir(), "Show S01E01.mkv")
 }
@@ -197,7 +199,9 @@ func TestBuiltinRestartsAria2Partial(t *testing.T) {
 	d.Add("ep", fs.URL+"/files/ep.mkv", path)
 	dl := stopAt(t, d, 0.3)
 
-	store.Cfg.Aria2 = false
+	off := store.CfgNow()
+	off.Aria2 = false
+	store.UseConfig(off)
 	d.Resume(dl.ID)
 	waitFor(t, "done", func() bool { return only(d).State == Done || only(d).State == Failed })
 	if got := only(d); got.State != Done {

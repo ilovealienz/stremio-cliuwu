@@ -295,8 +295,8 @@ func (l *listModel) Update(msg tea.Msg) (bool, tea.Cmd) {
 		}
 		if k == "backspace" && l.numBuf != "" {
 			l.numBuf = l.numBuf[:len(l.numBuf)-1]
-			if n, err := strconv.Atoi(l.numBuf); err == nil && n >= 1 && n <= len(l.view) {
-				l.cursor = n - 1
+			if n, err := strconv.Atoi(l.numBuf); err == nil && n >= 1 && n <= len(l.byOrd) {
+				l.cursor = l.byOrd[n-1]
 				l.scrollIntoView()
 			}
 			return true, nil
@@ -466,8 +466,8 @@ func (l *listModel) View() string {
 func (l *listModel) jumpLine() string {
 	label, _ := l.SelectedItem()
 	target := stripANSI(label.Label)
-	if len(target) > 40 {
-		target = target[:40] + "…"
+	if r := []rune(target); len(r) > 40 {
+		target = string(r[:40]) + "…"
 	}
 	return stKey.Render("go to #") + stCursor.Render(l.numBuf+"▌") +
 		stHint.Render("   "+target) +

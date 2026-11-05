@@ -16,8 +16,8 @@ import (
 )
 
 func TestDownloadPaths(t *testing.T) {
-	saved := *store.Cfg
-	t.Cleanup(func() { *store.Cfg = saved })
+	saved := store.CfgNow()
+	t.Cleanup(func() { store.UseConfig(saved) })
 
 	movie := store.StreamTarget{Meta: stremio.Meta{Name: "Inception", Year: "2010"}}
 	unnamed := store.StreamTarget{Label: "Some Label"}
@@ -27,9 +27,10 @@ func TestDownloadPaths(t *testing.T) {
 
 	var out []string
 	for _, folders := range []bool{true, false} {
-		*store.Cfg = store.Config{}
-		store.Cfg.SetDefaults()
-		store.Cfg.DownloadFolders = folders
+		var cfg store.Config
+		cfg.SetDefaults()
+		cfg.DownloadFolders = folders
+		store.UseConfig(cfg)
 		for _, c := range []struct {
 			name string
 			t    store.StreamTarget
@@ -77,11 +78,12 @@ func TestFmtSecs(t *testing.T) {
 }
 
 func TestPathEdgeCases(t *testing.T) {
-	saved := *store.Cfg
-	t.Cleanup(func() { *store.Cfg = saved })
-	*store.Cfg = store.Config{}
-	store.Cfg.SetDefaults()
-	store.Cfg.DownloadFolders = true
+	saved := store.CfgNow()
+	t.Cleanup(func() { store.UseConfig(saved) })
+	var cfg store.Config
+	cfg.SetDefaults()
+	cfg.DownloadFolders = true
+	store.UseConfig(cfg)
 
 	ep := func(show, title string) store.StreamTarget {
 		return store.StreamTarget{Queue: &stremio.EpQueue{Show: stremio.Meta{Name: show}, Season: 1,
@@ -174,10 +176,12 @@ func TestRemoveWhileActiveLeavesNothing(t *testing.T) {
 }
 
 func TestPathLeavesRoomForPartFiles(t *testing.T) {
-	saved := *store.Cfg
-	t.Cleanup(func() { *store.Cfg = saved })
-	store.Cfg.DownloadFolders = true
-	store.Cfg.EpisodePattern = "{show}/{episode} {title}"
+	saved := store.CfgNow()
+	t.Cleanup(func() { store.UseConfig(saved) })
+	cfg := saved
+	cfg.DownloadFolders = true
+	cfg.EpisodePattern = "{show}/{episode} {title}"
+	store.UseConfig(cfg)
 	long := strings.Repeat("Long Title ", 40)
 	target := store.StreamTarget{Queue: &stremio.EpQueue{Show: stremio.Meta{Name: "Show"}, Season: 1,
 		Episodes: []stremio.Video{{Season: 1, Episode: 1, Title: long}}}}

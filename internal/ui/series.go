@@ -260,7 +260,7 @@ func (s *seasonScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			// season instead.
 			if store.ToggleFav(store.Favourite{
 				Name: s.show.Name, ID: s.show.ID, Type: s.show.Type,
-				Source: s.show.Source, Year: s.show.Year,
+				Source: s.show.Source, Year: s.show.Year, Base: s.show.Base,
 			}) {
 				return s, toast("favourited " + s.show.Name)
 			}
@@ -497,7 +497,7 @@ func (s *episodeScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		case "f":
 			if store.ToggleFav(store.Favourite{
 				Name: s.show.Name, ID: s.show.ID, Type: s.show.Type,
-				Source: s.show.Source, Year: s.show.Year, Season: s.season,
+				Source: s.show.Source, Year: s.show.Year, Season: s.season, Base: s.show.Base,
 			}) {
 				return s, toast(fmt.Sprintf("favourited %s S%02d", s.show.Name, s.season))
 			}

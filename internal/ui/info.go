@@ -207,6 +207,8 @@ func (p *infoPane) ShowEpisode(show string, v stremio.Video) tea.Cmd {
 	}
 
 	p.forID = v.ID
+	// Anything still on its way for the previous title is now stale.
+	p.id, p.posterID, p.pending = poster.NewAsyncID(), poster.NewAsyncID(), nil
 	p.ep = &v
 	p.epShow = show
 	p.detail = stremio.MetaDetail{}
@@ -227,7 +229,6 @@ func (p *infoPane) ShowEpisode(show string, v stremio.Video) tea.Cmd {
 	// Kitty only, and opt-in: a still is a frame from an episode you haven't
 	// watched yet.
 	if ctx.cfg.EpisodeImages && poster.KittySupported() && v.Thumbnail != "" {
-		p.posterID = poster.NewAsyncID()
 		maxW, maxH := poster.Budget(ctx.cfg.PosterSize, p.w, p.h)
 		cmds = append(cmds, poster.KittyLoadCmd(p.posterID, v.Thumbnail, maxW, maxH))
 	}

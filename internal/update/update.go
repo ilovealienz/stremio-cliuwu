@@ -40,6 +40,7 @@ var (
 	updateCache  Info
 	updateAt     time.Time
 	updateTTL    = 6 * time.Hour
+	updateRetry  = 5 * time.Minute // a failed check is tried again sooner
 	updateLoaded bool
 )
 
@@ -67,8 +68,10 @@ func Check() tea.Cmd {
 		}
 
 		info := Info{}
+		at := time.Now().Add(updateRetry - updateTTL)
 		if err := stremio.GetJSONTimeout(releasesURL, &resp, 8*time.Second); err == nil &&
 			resp.TagName != "" && !resp.Draft {
+			at = time.Now()
 			info = Info{
 				State:  Compare(Version, resp.TagName),
 				Latest: resp.TagName,
@@ -77,7 +80,7 @@ func Check() tea.Cmd {
 		}
 
 		updateMu.Lock()
-		updateCache, updateAt, updateLoaded = info, time.Now(), true
+		updateCache, updateAt, updateLoaded = info, at, true
 		updateMu.Unlock()
 
 		return CheckedMsg{Info: info}

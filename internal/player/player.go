@@ -359,8 +359,31 @@ func (p *Player) connect() error {
 	p.mu.Unlock()
 
 	go p.readLoop(c)
+	go p.pollPos(c)
 	p.observe()
 	return nil
+}
+
+// pollPos reads the playback position once a second. Observing time-pos
+// instead sends an event for every frame, 30 to 60 a second, each one a wakeup
+// and a JSON decode for a value only shown to the second.
+func (p *Player) pollPos(c net.Conn) {
+	t := time.NewTicker(time.Second)
+	defer t.Stop()
+	for range t.C {
+		p.mu.Lock()
+		cur, now, replacing := p.conn, p.now, p.replacing
+		p.mu.Unlock()
+		if cur != c {
+			return
+		}
+		if now == nil || replacing {
+			continue
+		}
+		if resp, err := p.command("get_property", "time-pos"); err == nil {
+			p.property("time-pos", resp["data"], now)
+		}
+	}
 }
 
 func (p *Player) spawn() error {
@@ -386,7 +409,7 @@ func (p *Player) spawn() error {
 		"--input-ipc-server=" + socketPath(),
 	}
 	if cfg.SubtitleLang != "" {
-		args = append(args, "--slang="+cfg.SubtitleLang)
+		args = append(args, "--slang="+langList(cfg.SubtitleLang))
 	}
 
 	cmd := exec.Command(bin, args...)
@@ -396,6 +419,18 @@ func (p *Player) spawn() error {
 	}
 	go cmd.Wait() // don't leave a zombie
 	return nil
+}
+
+// langList joins the setting's languages the way mpv reads them; it doesn't
+// trim spaces after the commas.
+func langList(s string) string {
+	var out []string
+	for _, f := range strings.Split(s, ",") {
+		if f = strings.TrimSpace(f); f != "" {
+			out = append(out, f)
+		}
+	}
+	return strings.Join(out, ",")
 }
 
 func (p *Player) readLoop(c net.Conn) {
@@ -457,7 +492,7 @@ func (p *Player) sendAsync(fn func()) { go fn() }
 func mpvTitle(req PlayRequest) string {
 	e := req.Entry
 
-	mode := store.Cfg.MpvTitle
+	mode := store.CfgNow().MpvTitle
 	if mode == "" || mode == "default" {
 		return ""
 	}
@@ -563,7 +598,7 @@ func (p *Player) commandWait(wait time.Duration, args ...any) (map[string]any, e
 }
 
 func (p *Player) observe() {
-	props := []string{"time-pos", "duration", "pause", "media-title", "paused-for-cache"}
+	props := []string{"duration", "pause", "media-title", "paused-for-cache"} // time-pos: see pollPos
 	for i, prop := range props {
 		p.command("observe_property", i+1, prop)
 	}
@@ -603,8 +638,16 @@ func (p *Player) dispatch(m map[string]any) {
 	}
 }
 
-func (p *Player) onProperty(name string, data any) {
+func (p *Player) onProperty(name string, data any) { p.property(name, data, nil) }
+
+// property applies a value. A polled one carries the file it was asked for,
+// and is dropped if another has started since.
+func (p *Player) property(name string, data any, asked *PlayRequest) {
 	p.mu.Lock()
+	if asked != nil && (p.now != asked || p.replacing) {
+		p.mu.Unlock()
+		return
+	}
 	switch name {
 	case "time-pos":
 		if f, ok := data.(float64); ok {
@@ -780,8 +823,12 @@ func (p *Player) onEndFile(reason string) {
 	// A `loadfile ... replace` makes mpv emit end-file/stop for the outgoing
 	// file. That is bookkeeping, not the end of playback — ignore it.
 	if p.replacing {
-		p.mu.Unlock()
-		return
+		if reason != "error" {
+			p.mu.Unlock()
+			return
+		}
+		// The new file failed to open, so file-loaded never comes to clear it.
+		p.replacing = false
 	}
 	now := p.now
 	st := p.state
@@ -852,7 +899,12 @@ func (p *Player) onEndFile(reason string) {
 		// Deliberately doesn't skip ahead: a failure here means this stream is
 		// bad, so what you want is a different stream for the same episode,
 		// which is where you already are.
+		p.mu.Lock()
+		p.state.Loading = false
+		p.mu.Unlock()
 		p.emit(ErrMsg{Err: errors.New("mpv couldn't play that stream — R to refetch, or pick another")})
+		p.emit(StateMsg{State: p.State()})
+		return
 	default:
 		record(now, st)
 	}

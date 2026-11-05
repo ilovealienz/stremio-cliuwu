@@ -3,6 +3,7 @@ package store
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -155,6 +156,7 @@ func (h *historyStore) load() {
 	// than the app carrying a migration path forever.
 	var f historyFile
 	if json.Unmarshal(b, &f) != nil || f.Version < historyVer || f.Shows == nil {
+		Quarantine(histFile())
 		return
 	}
 
@@ -252,7 +254,12 @@ func (h *historyStore) Flush() {
 	h.mu.Unlock()
 
 	if err == nil {
-		WriteAtomic(histFile(), b, 0644)
+		err = WriteAtomic(histFile(), b, 0600)
+	}
+	if err != nil {
+		h.mu.Lock()
+		h.dirty = true // still unsaved, so the next flush tries again
+		h.mu.Unlock()
 	}
 }
 
@@ -302,7 +309,7 @@ func EpisodeStates(showID string) map[[2]int]EpState {
 	}
 	for k, e := range sh.Eps {
 		season, episode := parseEpKey(k)
-		if season <= 0 || episode <= 0 {
+		if season < 0 || episode <= 0 { // season 0 is specials; 0:0 is a film
 			continue
 		}
 		out[[2]int{season, episode}] = EpState{Position: e.P, Duration: e.D, Watched: e.W}
@@ -640,12 +647,18 @@ func (h *historyStore) showInRecent(id string) bool {
 // Removing only the row left the episode still ticked in the season list and
 // still holding its position, so "delete from history" deleted the evidence
 // and kept the effect.
-func ClearHistoryEntry(idx int) {
+//
+// Matched by identity, not position: LoadHistory skips rows whose show is
+// missing, so its indexes can drift from the stored list.
+func ClearHistoryEntry(e HistoryEntry) {
 	hist.mu.Lock()
 	defer hist.mu.Unlock()
 	hist.load()
 
-	if idx < 0 || idx >= len(hist.data.Recent) {
+	idx := slices.IndexFunc(hist.data.Recent, func(r recentEntry) bool {
+		return r.ShowID == e.ID && r.Season == e.Season && r.Episode == e.Episode
+	})
+	if idx < 0 {
 		return
 	}
 

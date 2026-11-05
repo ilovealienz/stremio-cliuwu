@@ -2,11 +2,15 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
+	"sync"
+	"time"
 )
 
 const AppName = "stremio-cliuwu"
@@ -108,7 +112,52 @@ func readJSON(path string, v any) error {
 	if err != nil {
 		return err
 	}
-	return json.Unmarshal(b, v)
+	err = json.Unmarshal(b, v)
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		// A field whose type changed between versions: every other field
+		// still loaded, so keep them rather than reset the file.
+		return nil
+	}
+	if err != nil {
+		Quarantine(path)
+	}
+	return err
+}
+
+var (
+	quarantineMu sync.Mutex
+	quarantined  []string
+	onQuarantine func(name string)
+)
+
+// Quarantine moves a file that won't parse aside, so the next save doesn't
+// overwrite the only copy with an empty one.
+func Quarantine(path string) {
+	moved := fmt.Sprintf("%s.corrupt-%d", path, time.Now().Unix())
+	if os.Rename(path, moved) != nil {
+		return
+	}
+	quarantineMu.Lock()
+	f := onQuarantine
+	if f == nil {
+		quarantined = append(quarantined, filepath.Base(moved))
+	}
+	quarantineMu.Unlock()
+	if f != nil {
+		f(filepath.Base(moved))
+	}
+}
+
+// OnQuarantine hands over the files moved so far and sets f to be told of
+// any later ones.
+func OnQuarantine(f func(name string)) []string {
+	quarantineMu.Lock()
+	defer quarantineMu.Unlock()
+	onQuarantine = f
+	out := quarantined
+	quarantined = nil
+	return out
 }
 
 // DefaultDownloadDir is a sensible starting point for the settings prompt.

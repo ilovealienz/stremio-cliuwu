@@ -178,7 +178,7 @@ func extFromURL(raw string) string {
 // A season pack keeps its layout rather than being flattened into one folder
 // of similarly-named files.
 func LibraryPath(root, pack, rel string) string {
-	if !store.Cfg.DownloadFolders {
+	if !store.CfgNow().DownloadFolders {
 		return filepath.Join(root, fitFile(store.SafeName(BaseName(rel))))
 	}
 
@@ -226,14 +226,14 @@ func Path(root string, t store.StreamTarget, url string) string {
 		if name == "" {
 			name = t.Label
 		}
-		segs = store.ExpandPattern(store.Cfg.MoviePattern, map[string]string{
+		segs = store.ExpandPattern(store.CfgNow().MoviePattern, map[string]string{
 			"title": name,
 			"year":  t.Meta.Year,
 		})
 	} else {
 		q := t.Queue
 		v := q.Episodes[q.Index]
-		segs = store.ExpandPattern(store.Cfg.EpisodePattern, map[string]string{
+		segs = store.ExpandPattern(store.CfgNow().EpisodePattern, map[string]string{
 			"show":    q.Show.Name,
 			"season":  fmt.Sprintf("%02d", q.Season),
 			"episode": fmt.Sprintf("%02d", v.Episode),
@@ -245,7 +245,7 @@ func Path(root string, t store.StreamTarget, url string) string {
 	if len(segs) == 0 {
 		segs = []string{"untitled"}
 	}
-	if !store.Cfg.DownloadFolders {
+	if !store.CfgNow().DownloadFolders {
 		segs = segs[len(segs)-1:]
 	}
 	for i := range segs {
@@ -293,6 +293,7 @@ func (d *Downloader) Load() {
 	}
 	var idx downloadIndex
 	if json.Unmarshal(b, &idx) != nil {
+		store.Quarantine(store.DownloadsFile())
 		return
 	}
 
@@ -758,7 +759,7 @@ func (d *Downloader) fetch(dl *Download) error {
 	if err := os.MkdirAll(filepath.Dir(dl.Path), 0755); err != nil {
 		return err
 	}
-	if store.Cfg.Aria2 {
+	if store.CfgNow().Aria2 {
 		bin, err := aria2Path()
 		if err != nil {
 			return err
@@ -778,6 +779,10 @@ func (d *Downloader) fetch(dl *Download) error {
 	if pi, ok := readPartInfo(dl.Path); ok && pi.URL == dl.URL {
 		if fi, err := os.Stat(part); err == nil {
 			offset = fi.Size()
+		}
+		// Stopped between the last byte and the rename.
+		if pi.Total > 0 && offset == pi.Total {
+			return d.finishPart(dl, part, offset)
 		}
 	} else {
 		os.Remove(part)
@@ -822,11 +827,25 @@ func (d *Downloader) fetch(dl *Download) error {
 		offset = 0 // server ignored the range, start over
 	case http.StatusPartialContent:
 		// resuming
+	case http.StatusRequestedRangeNotSatisfiable:
+		// Asked to resume at or past the end.
+		var size int64
+		if _, err := fmt.Sscanf(res.Header.Get("Content-Range"), "bytes */%d", &size); err == nil && size == offset {
+			return d.finishPart(dl, part, offset)
+		}
+		os.Remove(part)
+		os.Remove(infoPath(dl.Path))
+		return errors.New("the partial file no longer matches the server — enter to start over")
 	case http.StatusForbidden, http.StatusUnauthorized:
 		// Debrid links are time-limited; a stale one looks exactly like this.
 		return fmt.Errorf("%s — the link may have expired, press R on the stream list to refetch", res.Status)
 	default:
 		return fmt.Errorf("server said %s", res.Status)
+	}
+
+	// Some hosts answer an expired link with a 200 and an error page.
+	if ct := strings.ToLower(res.Header.Get("Content-Type")); strings.HasPrefix(ct, "text/html") {
+		return errors.New("the server sent a web page, not a video — the link may have expired, press R on the stream list to refetch")
 	}
 
 	// ContentLength is -1 when the server doesn't say. Carrying that through
@@ -893,6 +912,18 @@ func (d *Downloader) fetch(dl *Download) error {
 		return err
 	}
 	os.Remove(infoPath(dl.Path))
+	return nil
+}
+
+// finishPart renames a partial that already holds the whole file.
+func (d *Downloader) finishPart(dl *Download, part string, size int64) error {
+	if err := os.Rename(part, dl.Path); err != nil {
+		return err
+	}
+	os.Remove(infoPath(dl.Path))
+	d.mu.Lock()
+	dl.Done, dl.Total = size, size
+	d.mu.Unlock()
 	return nil
 }
 

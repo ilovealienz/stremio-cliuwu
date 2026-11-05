@@ -284,7 +284,9 @@ func Search(addons []Addon, query string) []Meta {
 		}
 	}
 
-	cacheSearch.Set(key, merged)
+	if len(merged) > 0 { // nothing found looks the same as every addon failing
+		cacheSearch.Set(key, merged)
+	}
 	return merged
 }
 
@@ -500,9 +502,9 @@ func GetSeriesMeta(addons []Addon, m Meta) SeriesMeta {
 		return resp.Meta
 	}
 
-	empty := SeriesMeta{}
-	cacheSeries.Set(m.ID, empty)
-	return empty
+	// Not cached: an empty result is as likely a failed fetch as a show with
+	// no episodes.
+	return SeriesMeta{}
 }
 
 // GetSeasonEpisodes returns sorted episodes for a season, enriched from OMDB

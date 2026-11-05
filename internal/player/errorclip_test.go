@@ -226,3 +226,41 @@ func TestStaleDurationWhileReplacing(t *testing.T) {
 		t.Fatal("clip not caught at load")
 	}
 }
+
+// A replace whose new file can't be opened ends in "error" and never loads.
+func TestReplaceThatFailsToOpen(t *testing.T) {
+	p := New(store.Config{})
+	playing(p, episode("show9", "show9:1:1"))
+	p.replacing, p.state.Loading = true, true
+
+	p.onEndFile("stop") // the outgoing file
+	if !p.replacing || !p.State().Loading {
+		t.Fatal("the outgoing file's stop should be ignored")
+	}
+	p.onEndFile("error")
+	if p.replacing || p.State().Loading {
+		t.Fatalf("still loading after the new file failed: replacing=%v", p.replacing)
+	}
+}
+
+// A polled position asked of one file never lands on the next.
+func TestPolledPositionForAnotherFile(t *testing.T) {
+	p := New(store.Config{})
+	a, b := episode("show10", "show10:1:1"), episode("show10", "show10:1:2")
+	playing(p, a)
+	asked := p.now
+	p.property("time-pos", 300.0, asked)
+	if p.State().Pos != 300 {
+		t.Fatal("position for the playing file dropped")
+	}
+	playing(p, b)
+	p.property("time-pos", 1400.0, asked)
+	if p.State().Pos != 0 {
+		t.Fatalf("old file's position applied to the new one: %v", p.State().Pos)
+	}
+	p.replacing = true
+	p.property("time-pos", 5.0, p.now)
+	if p.State().Pos != 0 {
+		t.Fatal("position applied mid-replace")
+	}
+}

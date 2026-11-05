@@ -37,10 +37,12 @@ jobs:
 
       - name: Resolve tag and version
         id: version
+        env:
+          TAG_INPUT: ${{ inputs.tag || github.ref_name }} # through env, not pasted into the script
         run: |
-          TAG="${{ inputs.tag || github.ref_name }}"
-          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
-          echo "VERSION=${TAG#v}" >> $GITHUB_OUTPUT
+          TAG="$TAG_INPUT"
+          echo "TAG=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "VERSION=${TAG#v}" >> "$GITHUB_OUTPUT"
           echo "releasing ${TAG}"
 
       - name: Build

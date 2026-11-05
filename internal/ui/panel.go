@@ -64,6 +64,10 @@ type panelAction struct {
 	open func() screen
 }
 
+// isFilm tells a film from an episode. Season 0 alone doesn't: it's also the
+// specials season.
+func isFilm(e store.HistoryEntry) bool { return e.Season <= 0 && e.Episode <= 0 }
+
 func newContinuePanel() continuePanel { return continuePanel{} }
 
 func (p *continuePanel) On() bool { return p.on }
@@ -157,7 +161,7 @@ func FetchTargetInfo(e store.HistoryEntry) tea.Cmd {
 		}
 
 		// A film has no episode to look up; it's the meta object itself.
-		if e.Season <= 0 {
+		if isFilm(e) {
 			d, ok := stremio.GetMetaDetail(ctx.addons, "movie", e.ID, "")
 			if !ok {
 				return targetInfoMsg{}
@@ -358,7 +362,7 @@ func (p *continuePanel) episodeBlock(e store.HistoryEntry, budget int) []string 
 	// A film: title, the facts line, genres, synopsis. Everything the info
 	// panel shows down to the summary, and nothing after it — cast and
 	// awards are for when you've gone looking, not for a glance.
-	if e.Season <= 0 {
+	if isFilm(e) {
 		d := p.epMovie
 		if p.epKey != targetKey(e) {
 			d = stremio.MetaDetail{} // fetch hasn't landed, or is for something else

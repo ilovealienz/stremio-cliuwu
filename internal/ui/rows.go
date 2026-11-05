@@ -126,7 +126,9 @@ func ShowHistoryItem(sh store.ShowSummary) Item {
 	return Item{Label: label, Sub: sub, Badge: badge}
 }
 
-func FavItem(f store.Favourite) Item {
+// FavItem renders a favourite with its watch progress from recent, which is
+// the history list read once for the whole screen.
+func FavItem(f store.Favourite, recent []store.HistoryEntry) Item {
 	yr := f.Year
 	if yr == "" {
 		yr = "?"
@@ -140,10 +142,9 @@ func FavItem(f store.Favourite) Item {
 	// Get watch progress from history
 	badge := kindTag(f.Source, f.Type) + season
 	if f.Type == "series" {
-		h := store.LoadHistory()
 		var lastEntry *store.HistoryEntry
-		for i := range h.Items {
-			e := &h.Items[i]
+		for i := range recent {
+			e := &recent[i]
 			if e.ID == f.ID {
 				if f.Season == 0 || e.Season == f.Season {
 					lastEntry = e

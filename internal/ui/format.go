@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"stremio-cliuwu/internal/download"
 	"stremio-cliuwu/internal/stremio"
@@ -262,6 +263,9 @@ func commonPrefix(a, b string) string {
 	i := 0
 	for i < n && a[i] == b[i] {
 		i++
+	}
+	for i > 0 && i < len(a) && !utf8.RuneStart(a[i]) {
+		i-- // don't stop inside a character
 	}
 	return a[:i]
 }

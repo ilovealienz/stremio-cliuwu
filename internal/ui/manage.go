@@ -55,8 +55,9 @@ func (s *favsScreen) Footer() string {
 func (s *favsScreen) rebuild() {
 	s.favs = store.LoadFavs().Items
 	items := make([]Item, len(s.favs))
+	recent := store.LoadHistory().Items
 	for i, f := range s.favs {
-		items[i] = FavItem(f)
+		items[i] = FavItem(f, recent)
 	}
 	s.list.SetItems(items)
 }
@@ -236,7 +237,7 @@ func (s *historyScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			if i >= len(s.entries) {
 				return s, nil
 			}
-			store.ClearHistoryEntry(i)
+			store.ClearHistoryEntry(s.entries[i])
 			store.InvalidateInProgress()
 			s.rebuild()
 			return s, toast("removed")

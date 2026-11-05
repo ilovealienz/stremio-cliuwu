@@ -2,12 +2,14 @@ package poster
 
 import (
 	"bytes"
+	"compress/zlib"
 	"context"
 	"encoding/base64"
+	"encoding/binary"
 	"fmt"
+	"hash/crc32"
 	"hash/fnv"
 	"image"
-	"image/png"
 	"os"
 	"os/exec"
 	"strings"
@@ -92,7 +94,7 @@ func KittySupported() bool {
 		return false
 	}
 
-	switch store.Cfg.KittyMode {
+	switch store.CfgNow().KittyMode {
 	case "kitty":
 		return true
 	case "default":
@@ -104,17 +106,24 @@ func KittySupported() bool {
 // kittyDetect reports whether the terminal around us — directly, or the
 // outer client when nested in tmux — speaks kitty graphics.
 func kittyDetect() bool {
+	// Inside tmux the inner TERM/TERM_PROGRAM describe tmux itself (and
+	// KITTY_WINDOW_ID can be left over from wherever the server started), so
+	// ask it what the outer client speaks. If tmux can't say, fall through.
+	// A terminal opened from a tmux shell inherits TMUX but names itself in
+	// TERM_PROGRAM, so that case skips the query.
+	tp := strings.ToLower(os.Getenv("TERM_PROGRAM"))
+	if os.Getenv("TMUX") != "" && (tp == "" || tp == "tmux") && !overSSH() {
+		if out, err := kittyTmuxClient(); err == nil && strings.Trim(out, ":") != "" {
+			return kittyName(out)
+		}
+	}
+
 	// TERM_PROGRAM before KITTY_WINDOW_ID: a terminal launched from kitty
 	// inherits that variable and never clears it, so WezTerm started inside
 	// kitty claims to be kitty. A terminal that names itself is the better
 	// authority than one that merely inherited a variable.
-	if tp := strings.ToLower(os.Getenv("TERM_PROGRAM")); tp != "" {
-		for _, sub := range []string{"kitty", "ghostty"} {
-			if strings.Contains(tp, sub) {
-				return true
-			}
-		}
-		return false
+	if tp != "" && tp != "tmux" {
+		return kittyName(tp)
 	}
 	if os.Getenv("KITTY_WINDOW_ID") != "" {
 		return true
@@ -124,32 +133,17 @@ func kittyDetect() bool {
 	// terminal drawing the screen: a forwarded "xterm-kitty" can sit in
 	// front of a viewer with no graphics support. Distrust name-based
 	// guesses there; STREMIO_KITTY=1 stays the explicit opt-in.
-	if os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" {
+	if overSSH() {
 		return false
 	}
+	return kittyName(strings.ToLower(os.Getenv("TERM")))
+}
 
-	term := strings.ToLower(os.Getenv("TERM"))
-	for _, sub := range []string{"kitty", "ghostty"} {
-		if strings.Contains(term, sub) {
-			return true
-		}
-	}
-	// Inside tmux the inner TERM/TERM_PROGRAM describe tmux itself, so ask
-	// it what the outer client speaks. Any failure — no server, an old
-	// tmux without these formats, a slow answer — means fallback.
-	if os.Getenv("TMUX") == "" {
-		return false
-	}
-	out, err := kittyTmuxClient()
-	if err != nil {
-		return false
-	}
-	for _, sub := range []string{"kitty", "ghostty"} {
-		if strings.Contains(out, sub) {
-			return true
-		}
-	}
-	return false
+func overSSH() bool { return os.Getenv("SSH_CONNECTION") != "" || os.Getenv("SSH_TTY") != "" }
+
+// kittyName reports whether a terminal name is one that speaks kitty graphics.
+func kittyName(s string) bool {
+	return strings.Contains(s, "kitty") || strings.Contains(s, "ghostty")
 }
 
 // kittyTmuxClient asks tmux for the outer client's terminal name and type,
@@ -321,9 +315,6 @@ func kittyAPC(ctrl string, payload []byte) []byte {
 	return append(b, "\x1b\\"...)
 }
 
-// kittyTransmit encodes an image to chunked PNG upload escapes. Transmit
-// only (a=t) — it stores the pixels invisibly and draws nothing; the
-// companion kittyPlace binds the stored image to the placeholder cells.
 // kittyPixelWidth is the width an image is uploaded at for a given placement.
 // Pixels, not cells: enough that the terminal's downscale has something to
 // work with, small enough to keep the upload quick.
@@ -331,34 +322,83 @@ func kittyPixelWidth(srcW, cols int) int {
 	return min(srcW, max(192, min(cols*8, 512)))
 }
 
-func kittyTransmit(img *image.RGBA, id uint32, cols int) []byte {
+// kittyTransmit encodes an image to chunked PNG upload escapes. Transmit
+// only (a=t) — it stores the pixels invisibly and draws nothing; the
+// companion kittyPlace binds the stored image to the placeholder cells.
+func kittyTransmit(img image.Image, id uint32, cols int) []byte {
 	pxW := kittyPixelWidth(img.Bounds().Dx(), cols)
 	pxH := max(1, pxW*img.Bounds().Dy()/max(1, img.Bounds().Dx()))
-	var pngBuf bytes.Buffer
-	if err := png.Encode(&pngBuf, boxScale(img, pxW, pxH)); err != nil {
-		return nil
-	}
-	b64 := make([]byte, base64.StdEncoding.EncodedLen(pngBuf.Len()))
-	base64.StdEncoding.Encode(b64, pngBuf.Bytes())
+	raw := encodePNG(boxScale(img, pxW, pxH))
+	b64 := make([]byte, base64.StdEncoding.EncodedLen(len(raw)))
+	base64.StdEncoding.Encode(b64, raw)
 
 	const chunk = 4096 // spec ceiling; a multiple of 4 keeps base64 whole
-	var out []byte
+	out := make([]byte, 0, len(b64)+(len(b64)/chunk+1)*16+64)
 	first := true
 	for len(b64) > 0 {
 		n := min(len(b64), chunk)
-		last := n == len(b64)
-		ctrl := "m=0"
-		if !last {
-			ctrl = "m=1"
-		}
+		out = append(out, "\x1b_G"...)
 		if first {
-			ctrl = fmt.Sprintf("a=t,t=d,f=100,i=%d,q=2,%s", id, ctrl)
+			out = fmt.Appendf(out, "a=t,t=d,f=100,i=%d,q=2,", id)
 			first = false
 		}
-		out = append(out, kittyAPC(ctrl, b64[:n])...)
+		if n == len(b64) {
+			out = append(out, "m=0;"...)
+		} else {
+			out = append(out, "m=1;"...)
+		}
+		out = append(out, b64[:n]...)
+		out = append(out, "\x1b\\"...)
 		b64 = b64[n:]
 	}
 	return out
+}
+
+// encodePNG writes an opaque RGB PNG with every row Up-filtered at zlib's
+// fastest level. image/png tries all five filters per row, which costs
+// about 2.5x the time for a file under a tenth smaller.
+func encodePNG(img *image.RGBA) []byte {
+	w, h := img.Bounds().Dx(), img.Bounds().Dy()
+	var out bytes.Buffer
+	out.Grow(w * h * 3 / 2)
+	out.WriteString("\x89PNG\r\n\x1a\n")
+	chunk := func(typ string, data []byte) {
+		var n [4]byte
+		binary.BigEndian.PutUint32(n[:], uint32(len(data)))
+		out.Write(n[:])
+		out.WriteString(typ)
+		out.Write(data)
+		c := crc32.Update(crc32.ChecksumIEEE([]byte(typ)), crc32.IEEETable, data)
+		binary.BigEndian.PutUint32(n[:], c)
+		out.Write(n[:])
+	}
+	var hdr [13]byte
+	binary.BigEndian.PutUint32(hdr[0:], uint32(w))
+	binary.BigEndian.PutUint32(hdr[4:], uint32(h))
+	hdr[8], hdr[9] = 8, 2 // 8-bit truecolour
+	chunk("IHDR", hdr[:])
+
+	var z bytes.Buffer
+	zw, _ := zlib.NewWriterLevel(&z, zlib.BestSpeed)
+	row := make([]byte, 1+w*3)
+	prev := make([]byte, w*3)
+	cur := make([]byte, w*3)
+	row[0] = 2 // Up
+	for y := range h {
+		p := img.Pix[img.PixOffset(img.Bounds().Min.X, img.Bounds().Min.Y+y):]
+		for x := range w {
+			cur[x*3], cur[x*3+1], cur[x*3+2] = p[x*4], p[x*4+1], p[x*4+2]
+		}
+		for i := range cur {
+			row[1+i] = cur[i] - prev[i]
+		}
+		zw.Write(row)
+		prev, cur = cur, prev
+	}
+	zw.Close()
+	chunk("IDAT", z.Bytes())
+	chunk("IEND", nil)
+	return out.Bytes()
 }
 
 // kittyPlace re-binds an already-transmitted image to a new rectangle — the
@@ -446,7 +486,7 @@ func KittyLoadCmd(pid AsyncID, url string, maxW, maxH int) tea.Cmd {
 
 		// Largest first. The URL that actually loaded is what gets reported
 		// back, since the resize path looks the dimensions up by it.
-		var img *image.RGBA
+		var img image.Image
 		var ok bool
 		for _, u := range Variants(url, true) {
 			if img, ok = posterImg(u); ok {

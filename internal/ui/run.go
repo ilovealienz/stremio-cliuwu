@@ -98,7 +98,7 @@ func Run(opts Options) {
 	}
 
 	model := newApp(newMenuScreen())
-	model.setStartup(startupCmd(opts))
+	model.setStartup(func() tea.Cmd { return startupCmd(opts) })
 
 	// 30fps keeps up with key repeat and halves idle wake-ups.
 	prog := tea.NewProgram(model, tea.WithAltScreen(), tea.WithFPS(30))
@@ -111,7 +111,7 @@ func Run(opts Options) {
 	// LoadAddons waits for every one of them, and the http client allows
 	// fifteen seconds — so a single unresponsive addon held the whole launch.
 	// This is a background goroutine, which is what Send is for.
-	go prog.Send(addonsReadyMsg{Addons: stremio.LoadAddons(refs)})
+	go func() { prog.Send(addonsReadyMsg{Addons: stremio.LoadAddons(refs)}) }()
 
 	// Index only — no folder walk at startup. R on the downloads screen
 	// rescans when the index and the disk have drifted apart.
@@ -119,7 +119,15 @@ func Run(opts Options) {
 
 	store.WarmHistory()
 
-	if firstRun {
+	corrupt := func(name string) {
+		go prog.Send(toastMsg{text: "couldn't read a file, moved it to " + name, isErr: true})
+	}
+	moved := store.OnQuarantine(corrupt)
+	for _, name := range moved {
+		corrupt(name)
+	}
+	// A corrupt addons.json also looks like a first run; that toast wins.
+	if firstRun && len(moved) == 0 {
 		go prog.Send(toastMsg{text: "welcome — add your stream addons under 'addons'"})
 	}
 	if cfg.MpvPath == "" {

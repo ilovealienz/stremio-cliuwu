@@ -50,7 +50,8 @@ func PrefetchLead(dur float64) float64 {
 
 // IsWatchedAt reports whether a position counts as having finished the video.
 func IsWatchedAt(pos, dur float64) bool {
-	if dur <= 0 {
+	// pos 0 is not started; a clip shorter than the allowance would pass otherwise.
+	if dur <= 0 || pos <= 0 {
 		return false
 	}
 	return dur-pos <= watchedAllowance(dur)

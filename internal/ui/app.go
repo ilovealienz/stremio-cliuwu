@@ -88,6 +88,13 @@ type toastExpireMsg struct{ at time.Time }
 
 type reloadAddonsMsg struct{}
 
+// addonsReloadedMsg brings a finished reload back to the UI goroutine.
+type addonsReloadedMsg struct {
+	gen    int
+	refs   stremio.AddonList
+	addons []stremio.Addon
+}
+
 // themeChangedMsg forces every screen to re-render its rows.
 //
 // Screens bake styled text into Item.Label when they build their list, so
@@ -147,23 +154,20 @@ type app struct {
 
 	autoOffAt time.Time // autoplay was turned off; shown in red for a moment
 
-	startup tea.Cmd
+	startup func() tea.Cmd
+
+	reloadGen int // so an older reload finishing late is dropped
 }
 
 func newApp(root screen) *app { return &app{stack: []screen{root}} }
 
-// startup runs once the program is up: used to jump straight to a search or a
-// catalog from the command line.
-func (a *app) setStartup(cmd tea.Cmd) { a.startup = cmd }
+// startup runs once the addons are loaded: used to jump straight to a search
+// or a catalog from the command line, both of which need them.
+func (a *app) setStartup(f func() tea.Cmd) { a.startup = f }
 
 func (a *app) top() screen { return a.stack[len(a.stack)-1] }
 
-func (a *app) Init() tea.Cmd {
-	if a.startup != nil {
-		return tea.Batch(a.top().Init(), a.startup)
-	}
-	return a.top().Init()
-}
+func (a *app) Init() tea.Cmd { return a.top().Init() }
 
 func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if _, ok := msg.(tea.KeyMsg); ok {
@@ -294,7 +298,9 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, m.s.Init()
 
 	case addonsReadyMsg:
-		ctx.addons = m.Addons
+		if a.reloadGen == 0 { // a reload since launch has newer addons than this
+			ctx.addons = m.Addons
+		}
 		ctx.loading = false
 		for _, sc := range a.stack {
 			if r, ok := sc.(rebuildable); ok {
@@ -305,6 +311,10 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// the addons existed got nothing back, and needs telling to try again.
 		next, cmd := a.top().Update(msg)
 		a.stack[len(a.stack)-1] = next
+		if a.startup != nil {
+			cmd = tea.Batch(cmd, a.startup())
+			a.startup = nil
+		}
 		return a, cmd
 
 	case themeChangedMsg:
@@ -316,11 +326,27 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return a, nil
 
 	case reloadAddonsMsg:
-		ctx.refs = store.LoadAddonRefs()
-		ctx.addons = stremio.LoadAddons(ctx.refs)
+		// Off the UI goroutine: fetching every manifest takes seconds.
+		a.reloadGen++
+		gen := a.reloadGen
+		return a, func() tea.Msg {
+			refs := store.LoadAddonRefs()
+			return addonsReloadedMsg{gen: gen, refs: refs, addons: stremio.LoadAddons(refs)}
+		}
+
+	case addonsReloadedMsg:
+		if m.gen != a.reloadGen {
+			return a, nil
+		}
+		ctx.refs, ctx.addons = m.refs, m.addons
 		// An edited addon url or a newly enabled addon should be asked straight away.
 		stremio.ClearStreams()
 		stremio.CacheSubs.Clear()
+		for _, sc := range a.stack {
+			if r, ok := sc.(rebuildable); ok {
+				r.rebuild()
+			}
+		}
 		return a, nil
 
 	case tea.KeyMsg:

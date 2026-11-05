@@ -2,11 +2,14 @@ package poster
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"image"
+	"image/draw"
 	"io"
 	"math"
 	"net/http"
+	neturl "net/url"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -150,6 +153,11 @@ type Msg struct {
 
 // OpenURL hands a link to the desktop.
 func OpenURL(u string) error {
+	// Links come from addons; anything but a web page could launch a local
+	// file or a custom handler.
+	if p, err := neturl.Parse(u); err != nil || (p.Scheme != "http" && p.Scheme != "https") {
+		return errors.New("not a web link")
+	}
 	switch runtime.GOOS {
 	case "windows":
 		return exec.Command("rundll32", "url.dll,FileProtocolHandler", u).Start()
@@ -198,55 +206,147 @@ func cellEscape(profile termenv.Profile, tr, tg, tb, br, bg, bb uint8) string {
 // matters a lot when the result is 22 cells wide. Averaging directly in sRGB
 // darkens mid-tones and looks soft/muddy, so each channel goes sRGB -> linear
 // (gamma 2.2), averages there, then converts back.
-func boxScale(src *image.RGBA, w, h int) *image.RGBA {
+//
+// src is a decoded JPEG's YCbCr or an RGBA (see scalable). Each source row is
+// converted once, straight into linear light, so the full-size image is never
+// copied to RGBA first.
+func boxScale(src image.Image, w, h int) *image.RGBA {
 	dst := image.NewRGBA(image.Rect(0, 0, w, h))
 	sb := src.Bounds()
 	sw, sh := sb.Dx(), sb.Dy()
 	if sw == 0 || sh == 0 || w == 0 || h == 0 {
 		return dst
 	}
-	toLinear := func(c uint8) float64 {
-		return math.Pow(float64(c)/255, 2.2)
+	xs := make([]int, w+1) // column x covers source columns xs[x]..xs[x+1]
+	for x := range w {
+		xs[x] = x * sw / w
+		xs[x+1] = max((x+1)*sw/w, xs[x]+1)
 	}
-	toSRGB := func(v float64) uint8 {
-		return uint8(math.Pow(v, 1/2.2)*255 + 0.5)
-	}
-
+	row := make([]float32, sw*3)
+	acc := make([]float32, w*3)
 	for y := range h {
-		y0 := sb.Min.Y + y*sh/h
-		y1 := sb.Min.Y + (y+1)*sh/h
-		if y1 <= y0 {
-			y1 = y0 + 1
+		y0 := y * sh / h
+		y1 := max((y+1)*sh/h, y0+1)
+		clear(acc)
+		for sy := y0; sy < y1; sy++ {
+			linearRow(src, sb.Min.Y+sy, row)
+			for x := range w {
+				var r, g, b float32
+				for i := xs[x] * 3; i < xs[x+1]*3; i += 3 {
+					r += row[i]
+					g += row[i+1]
+					b += row[i+2]
+				}
+				acc[x*3] += r
+				acc[x*3+1] += g
+				acc[x*3+2] += b
+			}
 		}
 		for x := range w {
-			x0 := sb.Min.X + x*sw/w
-			x1 := sb.Min.X + (x+1)*sw/w
-			if x1 <= x0 {
-				x1 = x0 + 1
-			}
-
-			var r, g, b float64
-			var n float64
-			for sy := y0; sy < y1; sy++ {
-				for sx := x0; sx < x1; sx++ {
-					c := src.RGBAAt(sx, sy)
-					r += toLinear(c.R)
-					g += toLinear(c.G)
-					b += toLinear(c.B)
-					n++
-				}
-			}
-			if n == 0 {
-				continue
-			}
+			n := float32((y1 - y0) * (xs[x+1] - xs[x]))
 			i := dst.PixOffset(x, y)
-			dst.Pix[i+0] = toSRGB(r / n)
-			dst.Pix[i+1] = toSRGB(g / n)
-			dst.Pix[i+2] = toSRGB(b / n)
+			dst.Pix[i+0] = toSRGB(acc[x*3] / n)
+			dst.Pix[i+1] = toSRGB(acc[x*3+1] / n)
+			dst.Pix[i+2] = toSRGB(acc[x*3+2] / n)
 			dst.Pix[i+3] = 255
 		}
 	}
 	return dst
+}
+
+// linearRow fills out with source row y as linear R, G, B.
+func linearRow(src image.Image, y int, out []float32) {
+	lin := gammaTables()
+	b := src.Bounds()
+	switch s := src.(type) {
+	case *image.YCbCr:
+		// color.YCbCrToRGB, with the offsets worked out once per row and the
+		// chroma terms once per sample rather than per pixel.
+		div := 1
+		switch s.SubsampleRatio {
+		case image.YCbCrSubsampleRatio422, image.YCbCrSubsampleRatio420:
+			div = 2
+		case image.YCbCrSubsampleRatio411, image.YCbCrSubsampleRatio410:
+			div = 4
+		}
+		ys := s.Y[s.YOffset(b.Min.X, y):]
+		cb, cr := s.Cb[s.COffset(b.Min.X, y):], s.Cr[s.COffset(b.Min.X, y):]
+		c0, last := b.Min.X/div, -1
+		var rc, gc, bc int32
+		for x := range b.Dx() {
+			if ci := (b.Min.X+x)/div - c0; ci != last {
+				cb1, cr1 := int32(cb[ci])-128, int32(cr[ci])-128
+				rc, gc, bc = 91881*cr1, -22554*cb1-46802*cr1, 116130*cb1
+				last = ci
+			}
+			yy := int32(ys[x]) * 0x10101
+			out[x*3], out[x*3+1], out[x*3+2] = lin[clamp8(yy+rc)], lin[clamp8(yy+gc)], lin[clamp8(yy+bc)]
+		}
+	case *image.RGBA:
+		p := s.Pix[s.PixOffset(b.Min.X, y):]
+		for x := range b.Dx() {
+			out[x*3], out[x*3+1], out[x*3+2] = lin[p[x*4]], lin[p[x*4+1]], lin[p[x*4+2]]
+		}
+	}
+}
+
+// clamp8 is the >>16 and clamp from color.YCbCrToRGB.
+func clamp8(v int32) uint8 {
+	if uint32(v)&0xff000000 == 0 {
+		return uint8(v >> 16)
+	}
+	return uint8(^(v >> 31))
+}
+
+// scalable returns img in a form boxScale reads directly, converting only
+// what isn't YCbCr or RGBA already.
+func scalable(img image.Image) image.Image {
+	switch img.(type) {
+	case *image.YCbCr, *image.RGBA:
+		return img
+	}
+	return toRGBA(img)
+}
+
+var (
+	gammaOnce sync.Once
+	linTab    [256]float32
+	thrTab    [257]float32
+	guessTab  [1024]uint8
+)
+
+// gammaTables builds sRGB→linear for each byte value, plus the linear value
+// at which each byte starts when converting back (thr[i] = byte i-0.5) and a
+// guess per step of √v, so boxScale needs no math.Pow.
+func gammaTables() *[256]float32 {
+	gammaOnce.Do(func() {
+		for i := range linTab {
+			linTab[i] = float32(math.Pow(float64(i)/255, 2.2))
+			thrTab[i] = float32(math.Pow((float64(i)-0.5)/255, 2.2))
+		}
+		thrTab[0], thrTab[256] = 0, 2
+		b := 0
+		for i := range guessTab {
+			v := float32(i) / float32(len(guessTab)-1)
+			for thrTab[b+1] <= v*v {
+				b++
+			}
+			guessTab[i] = uint8(b)
+		}
+	})
+	return &linTab
+}
+
+// toSRGB converts a linear value in [0,1] back to an sRGB byte, rounding
+// in sRGB space like math.Pow(v, 1/2.2)*255+0.5 would. Indexed by √v, which
+// tracks the sRGB curve closely enough that one step at most finishes it.
+func toSRGB(v float32) uint8 {
+	i := int(float32(math.Sqrt(float64(max(v, 0)))) * float32(len(guessTab)-1))
+	b := int(guessTab[min(i, len(guessTab)-1)])
+	for thrTab[b+1] <= v {
+		b++
+	}
+	return uint8(b)
 }
 
 func toRGBA(src image.Image) *image.RGBA {
@@ -255,16 +355,7 @@ func toRGBA(src image.Image) *image.RGBA {
 	}
 	b := src.Bounds()
 	dst := image.NewRGBA(image.Rect(0, 0, b.Dx(), b.Dy()))
-	for y := range b.Dy() {
-		for x := range b.Dx() {
-			r, g, bl, a := src.At(b.Min.X+x, b.Min.Y+y).RGBA()
-			i := dst.PixOffset(x, y)
-			dst.Pix[i+0] = uint8(r >> 8)
-			dst.Pix[i+1] = uint8(g >> 8)
-			dst.Pix[i+2] = uint8(bl >> 8)
-			dst.Pix[i+3] = uint8(a >> 8)
-		}
-	}
+	draw.Draw(dst, dst.Bounds(), src, b.Min, draw.Src)
 	return dst
 }
 
@@ -290,7 +381,7 @@ func Size(srcW, srcH, maxW, maxH int) (int, int) {
 }
 
 // renderPoster turns an image into half-block rows.
-func renderPoster(img *image.RGBA, maxW, maxH int) string {
+func renderPoster(img image.Image, maxW, maxH int) string {
 	profile := posterColors()
 	if profile == termenv.Ascii {
 		return "" // no colour, no point
@@ -351,8 +442,8 @@ func Variants(url string, biggest bool) []string {
 		// The configured quality first, then the rest largest-first as
 		// fallbacks in case metahub has nothing at that size.
 		want := "large"
-		if store.Cfg.PosterQuality != "" {
-			want = store.Cfg.PosterQuality
+		if store.CfgNow().PosterQuality != "" {
+			want = store.CfgNow().PosterQuality
 		}
 		sizes = []string{want}
 		for _, s := range []string{"large", "medium", "small"} {
@@ -369,6 +460,11 @@ func Variants(url string, biggest bool) []string {
 	return out
 }
 
+const (
+	maxPosterBytes  = 4 << 20
+	maxPosterPixels = 3000 * 4500 // a 2:3 poster well past what poster sites serve
+)
+
 // posterBytes returns the encoded poster, from the cache or the network.
 func posterBytes(url string) ([]byte, bool) {
 	if raw, ok := cachePosterBytes.Get(url); ok {
@@ -383,8 +479,9 @@ func posterBytes(url string) ([]byte, bool) {
 	if res.StatusCode != http.StatusOK {
 		return nil, false
 	}
-	raw, err := io.ReadAll(io.LimitReader(res.Body, 4<<20))
-	if err != nil {
+	// One byte over the cap tells a cut-off file from one that fit exactly.
+	raw, err := io.ReadAll(io.LimitReader(res.Body, maxPosterBytes+1))
+	if err != nil || len(raw) > maxPosterBytes {
 		return nil, false
 	}
 	cachePosterBytes.Set(url, raw)
@@ -396,17 +493,21 @@ func posterBytes(url string) ([]byte, bool) {
 // The decoded image is returned to the caller and not retained — see
 // cachePosterBytes. Repeat calls come out of the byte cache, so the cost is a
 // decode rather than a download.
-func posterImg(url string) (*image.RGBA, bool) {
+func posterImg(url string) (image.Image, bool) {
 	raw, ok := posterBytes(url)
 	if !ok {
 		return nil, false
 	}
 
+	// A small file can declare huge dimensions; check before decoding.
+	if c, _, err := image.DecodeConfig(bytes.NewReader(raw)); err != nil || int64(c.Width)*int64(c.Height) > maxPosterPixels {
+		return nil, false
+	}
 	decoded, _, err := image.Decode(bytes.NewReader(raw))
 	if err != nil {
 		return nil, false
 	}
-	img := toRGBA(decoded)
+	img := scalable(decoded)
 	CacheDims.Set(url, posterDims{W: img.Bounds().Dx(), H: img.Bounds().Dy()})
 	return img, true
 }
@@ -427,13 +528,13 @@ type preloadJob struct {
 
 // PreloadAhead queues rows at the pane's size. Call from Update.
 func PreloadAhead(metas []stremio.Meta, addons []stremio.Addon, paneW, paneH int) {
-	if store.Cfg.PreloadAhead <= 0 {
+	if store.CfgNow().PreloadAhead <= 0 {
 		return
 	}
 	// Everything that reads config is worked out here, not in the worker.
-	posters := store.Cfg.Posters && paneW >= 12 // the same gate as loadPoster
+	posters := store.CfgNow().Posters && paneW >= 12 // the same gate as loadPoster
 	kitty := posters && KittySupported()
-	maxW, maxH := Budget(store.Cfg.PosterSize, paneW, paneH)
+	maxW, maxH := Budget(store.CfgNow().PosterSize, paneW, paneH)
 
 	var queue []preloadJob
 	for _, m := range metas {
@@ -487,7 +588,7 @@ func preloadWorker() {
 
 // Fetch downloads and renders a poster. Safe to call from a goroutine.
 func Fetch(url string, maxW, maxH int) string {
-	if url == "" || !store.Cfg.Posters {
+	if url == "" || !store.CfgNow().Posters {
 		return ""
 	}
 
@@ -499,7 +600,7 @@ func Fetch(url string, maxW, maxH int) string {
 	// Smallest first: half-blocks downscale to a few dozen cells either way,
 	// so the large file is a few hundred kilobytes spent on detail that can
 	// never reach the screen.
-	var img *image.RGBA
+	var img image.Image
 	var ok bool
 	for _, u := range Variants(url, false) {
 		if img, ok = posterImg(u); ok {

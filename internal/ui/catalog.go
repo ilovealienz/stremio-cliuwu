@@ -206,6 +206,10 @@ type catalogScreen struct {
 	info        infoPane
 	loaded      bool
 	loadingMore bool
+
+	// awaitingGenre: the catalog needs a genre and the picker was left
+	// without choosing one.
+	awaitingGenre bool
 }
 
 func newCatalogScreen(ref stremio.CatalogRef) *catalogScreen {
@@ -250,6 +254,7 @@ func (s *catalogScreen) Init() tea.Cmd {
 	// Some addons won't serve a catalog at all without a genre, so ask before
 	// firing off a request that can only fail.
 	if s.ref.NeedsGenre && s.genre == "" && len(s.ref.Genres) > 0 {
+		s.awaitingGenre = true
 		return push(newGenrePicker(s.ref, func(g string) tea.Cmd {
 			return s.setGenre(g)
 		}))
@@ -268,6 +273,7 @@ func (s *catalogScreen) setGenre(g string) tea.Cmd {
 func (s *catalogScreen) loadPage(skip int) tea.Cmd {
 	s.id = poster.NewAsyncID()
 	s.loadingMore = skip > 0
+	s.awaitingGenre = false
 	id, ref, genre := s.id, s.ref, s.genre
 	what := ref.Name
 	if genre != "" {
@@ -352,6 +358,10 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.busy.stop()
 		s.loaded = true
 		if m.err != nil {
+			if s.loadingMore {
+				s.loadingMore = false // or the row stays on loading… and enter can't ask again
+				s.rebuild()
+			}
 			return s, toastErr(m.err.Error())
 		}
 		was := len(s.metas)
@@ -444,6 +454,9 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 
 func (s *catalogScreen) View() string {
 	if !s.loaded {
+		if s.awaitingGenre {
+			return "\n  " + stHint.Render("this catalog needs a genre — g to pick one, esc to go back")
+		}
 		return s.busy.view()
 	}
 	what := s.ref.AddonName
