@@ -1,5 +1,5 @@
 {
-  "version": 15,
+  "version": 16,
   "mpv_path": "",
   "preferred_quality": "",
   "subtitle_lang": "eng, en, English",
@@ -11,6 +11,7 @@
   "auto_resume": true,
   "close_mpv_on_exit": true,
   "cached_first": true,
+  "retry_loads": true,
   "accent": "pink",
   "auto_info": true,
   "posters": true,

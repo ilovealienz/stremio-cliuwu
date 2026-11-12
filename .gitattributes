@@ -1,0 +1,2 @@
+# LF everywhere, so golden files compare the same on Windows.
+* text=auto eol=lf

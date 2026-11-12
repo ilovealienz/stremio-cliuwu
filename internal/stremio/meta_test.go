@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // world answers addon requests by host and path, and counts them.
@@ -54,14 +55,7 @@ func useWorld(t *testing.T, routes map[string]any) *world {
 
 // clearCaches empties every response cache, so no test sees another's
 // results — including an earlier run of itself under -count.
-func clearCaches() {
-	cacheCatalog.Clear()
-	cacheSearch.Clear()
-	cacheSeries.Clear()
-	CacheMetaDetail.Clear()
-	CacheSubs.Clear()
-	ClearStreams()
-}
+func clearCaches() { ClearCaches() }
 
 func manifestAddon(host string, m string) Addon {
 	var man Manifest
@@ -206,7 +200,7 @@ func TestSearchMergesAndCaches(t *testing.T) {
 		}},
 		// series search 404s: the rest still merge
 	})
-	got := Search([]Addon{a, b}, "  the thing ")
+	got, _ := Search([]Addon{a, b}, "  the thing ")
 	if len(got) != 2 || got[0].Name != "The Thing (A)" || got[1].ID != "tt2" {
 		t.Fatalf("merged = %+v", got)
 	}
@@ -214,7 +208,7 @@ func TestSearchMergesAndCaches(t *testing.T) {
 	if n := w.count("a.test/catalog/movie/m/search=the+thing.json"); n != 1 {
 		t.Errorf("cached search asked again (%d)", n)
 	}
-	if Search([]Addon{a, b}, "   ") != nil {
+	if got, _ := Search([]Addon{a, b}, "   "); got != nil {
 		t.Error("blank query searched")
 	}
 }
@@ -225,7 +219,7 @@ func TestSearchByImdbID(t *testing.T) {
 		"cinemeta.test/meta/movie/tt0111161.json": map[string]any{"meta": map[string]any{"id": "tt0111161", "name": "The Shawshank Redemption", "releaseInfo": "1994"}},
 	})
 	for _, q := range []string{"tt0111161", "https://www.imdb.com/title/tt0111161/"} {
-		got := Search([]Addon{cm}, q)
+		got, _ := Search([]Addon{cm}, q)
 		if len(got) != 1 || got[0].Type != "movie" || got[0].Name != "The Shawshank Redemption" || got[0].Source != "movie" {
 			t.Errorf("%s: %+v", q, got)
 		}
@@ -313,7 +307,7 @@ func TestSeriesMeta(t *testing.T) {
 // OMDb fills missing episode titles, but an episode it lists that the addon
 // doesn't have has no id to play and mustn't appear.
 func TestSeasonEpisodesOMDb(t *testing.T) {
-	useWorld(t, map[string]any{
+	w := useWorld(t, map[string]any{
 		"www.omdbapi.com/?i=tt5&Season=1&apikey=k": map[string]any{"Episodes": []any{
 			map[string]any{"Episode": "1", "Title": "Pilot", "Released": "2020-01-01"},
 			map[string]any{"Episode": "2", "Title": "N/A", "Released": "N/A"},
@@ -331,6 +325,35 @@ func TestSeasonEpisodesOMDb(t *testing.T) {
 	if eps[0].Title != "Pilot" || eps[0].Released != "2020-01-01" || eps[1].Title != "Kept" {
 		t.Fatalf("enriched = %+v", eps)
 	}
+
+	// Opening the season again doesn't ask OMDb again.
+	GetSeasonEpisodes(Meta{ID: "tt5", Source: "show"}, 1, sm, "k")
+	if n := w.count("www.omdbapi.com/?i=tt5&Season=1&apikey=k"); n != 1 {
+		t.Errorf("asked OMDb %d times", n)
+	}
+}
+
+// A hanging OMDb doesn't hold up the list: the addon's episodes show without
+// its titles.
+func TestSeasonEpisodesSlowOMDb(t *testing.T) {
+	saved, savedT := HTTPClient.Transport, omdbTimeout
+	HTTPClient.Transport = hang{}
+	omdbTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { HTTPClient.Transport, omdbTimeout = saved, savedT; clearCaches() })
+
+	sm := SeriesMeta{Videos: []Video{{ID: "tt8:1:1", Season: 1, Episode: 1, Title: "Kept"}}}
+	start := time.Now()
+	eps := GetSeasonEpisodes(Meta{ID: "tt8", Source: "show"}, 1, sm, "k")
+	if len(eps) != 1 || eps[0].Title != "Kept" || time.Since(start) > time.Second {
+		t.Fatalf("%v after %v", eps, time.Since(start))
+	}
+}
+
+type hang struct{}
+
+func (hang) RoundTrip(r *http.Request) (*http.Response, error) {
+	<-r.Context().Done()
+	return nil, r.Context().Err()
 }
 
 // A kitsu cour is regrouped into the full show when the addon knows its imdb

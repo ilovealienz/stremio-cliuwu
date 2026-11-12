@@ -3,9 +3,11 @@ package stremio
 import (
 	"errors"
 	"fmt"
+	"net"
 	"net/url"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -100,14 +102,34 @@ func shorten(s string) string {
 	return s
 }
 
+// plainErr reads as msg and still unwraps to the error underneath.
+type plainErr struct {
+	msg string
+	err error
+}
+
+func (e plainErr) Error() string { return e.msg }
+func (e plainErr) Unwrap() error { return e.err }
+
 // CleanErr drops the request URL from a transport error, keeping the host,
 // since addon URLs can carry an API key.
 func CleanErr(err error) error {
 	var ue *url.Error
 	if errors.As(err, &ue) {
-		if u, perr := url.Parse(ue.URL); perr == nil && u.Host != "" &&
-			!strings.Contains(ue.Err.Error(), u.Hostname()) {
-			return fmt.Errorf("%s: %w", u.Host, ue.Err)
+		host := ""
+		if u, perr := url.Parse(ue.URL); perr == nil {
+			host = u.Host
+		}
+		var dns *net.DNSError
+		switch {
+		case errors.As(ue.Err, &dns):
+			return plainErr{fmt.Sprintf("can't find %s — offline, or the address is wrong", host), ue.Err}
+		case errors.Is(ue.Err, syscall.ECONNREFUSED):
+			return plainErr{host + " refused the connection", ue.Err}
+		case isTimeout(ue.Err):
+			return plainErr{host + " didn't answer in time", ue.Err}
+		case host != "" && !strings.Contains(ue.Err.Error(), host):
+			return fmt.Errorf("%s: %w", host, ue.Err)
 		}
 		return ue.Err
 	}

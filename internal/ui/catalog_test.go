@@ -25,6 +25,23 @@ func TestFailedLoadMoreCanBeRetried(t *testing.T) {
 	}
 }
 
+// An addon that ignores skip sends the first page again. Nothing new means
+// there's nothing more, rather than a load more row that never loads any.
+func TestSamePageAgainEndsPaging(t *testing.T) {
+	useCtx(t, &appCtx{cfg: &store.Config{}})
+	s := newCatalogScreen(stremio.CatalogRef{Name: "Top"})
+	page := []stremio.Meta{{ID: "tt1", Name: "One"}, {ID: "tt2", Name: "Two"}}
+	s.Update(catalogPageMsg{id: s.id, metas: page, hasMore: true})
+	if !s.hasMore {
+		t.Fatal("no load more after the first page")
+	}
+	s.loadPage(2)
+	s.Update(catalogPageMsg{id: s.id, metas: page, hasMore: true})
+	if s.hasMore || len(s.metas) != 2 {
+		t.Fatalf("hasMore %v with %d titles", s.hasMore, len(s.metas))
+	}
+}
+
 func TestGenrePickerLeftWithoutChoosing(t *testing.T) {
 	useCtx(t, &appCtx{cfg: &store.Config{}})
 	s := newCatalogScreen(stremio.CatalogRef{Name: "Top", NeedsGenre: true, Genres: []string{"Drama"}})

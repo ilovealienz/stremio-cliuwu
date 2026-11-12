@@ -229,27 +229,30 @@ func SearchByID(addons []Addon, id string) []Meta {
 	return nil
 }
 
-func Search(addons []Addon, query string) []Meta {
+// Search asks every searchable catalog. The error is set only when every one
+// of them failed, so "nothing found" means nothing was found.
+func Search(addons []Addon, query string) ([]Meta, error) {
 	if m := imdbIDRe.FindStringSubmatch(strings.TrimSpace(query)); m != nil {
-		return SearchByID(addons, m[1])
+		return SearchByID(addons, m[1]), nil
 	}
 
 	q := strings.TrimSpace(query)
 	if q == "" {
-		return nil
+		return nil, nil
 	}
 
 	refs := SearchCatalogs(addons)
 	if len(refs) == 0 {
-		return nil
+		return nil, nil
 	}
 
 	key := strings.ToLower(q)
 	if v, ok := cacheSearch.Get(key); ok {
-		return v
+		return v, nil
 	}
 
 	results := make([][]Meta, len(refs))
+	errs := make([]error, len(refs))
 	var wg sync.WaitGroup
 	for i, ref := range refs {
 		wg.Add(1)
@@ -259,7 +262,7 @@ func Search(addons []Addon, query string) []Meta {
 				ref.Base, ref.Type, url.PathEscape(ref.ID), url.QueryEscape(q))
 
 			var resp catalogResponse
-			if GetJSON(u, &resp) != nil {
+			if errs[i] = GetJSON(u, &resp); errs[i] != nil {
 				return
 			}
 			src := sourceOf(ref.Type)
@@ -287,7 +290,12 @@ func Search(addons []Addon, query string) []Meta {
 	if len(merged) > 0 { // nothing found looks the same as every addon failing
 		cacheSearch.Set(key, merged)
 	}
-	return merged
+	for _, err := range errs {
+		if err == nil {
+			return merged, nil
+		}
+	}
+	return merged, errs[0]
 }
 
 // ── Meta ──────────────────────────────────────────────────────────────────────
@@ -507,6 +515,34 @@ func GetSeriesMeta(addons []Addon, m Meta) SeriesMeta {
 	return SeriesMeta{}
 }
 
+type omdbEp struct {
+	Episode  string `json:"Episode"`
+	Title    string `json:"Title"`
+	Released string `json:"Released"`
+}
+
+var cacheOmdb = cache.New[[]omdbEp](6*time.Hour, 200)
+
+var omdbTimeout = 5 * time.Second
+
+// omdbSeason is OMDb's titles and dates for a season. It only improves the
+// list, so a slow answer doesn't get to hold it up.
+func omdbSeason(id string, season int, key string) []omdbEp {
+	ck := fmt.Sprint(id, ":", season)
+	if v, ok := cacheOmdb.Get(ck); ok {
+		return v
+	}
+	var resp struct {
+		Episodes []omdbEp `json:"Episodes"`
+	}
+	u := fmt.Sprintf("%s/?i=%s&Season=%d&apikey=%s", urlOMDB, url.QueryEscape(id), season, url.QueryEscape(key))
+	if GetJSONTimeout(u, &resp, omdbTimeout) != nil || len(resp.Episodes) == 0 {
+		return nil
+	}
+	cacheOmdb.Set(ck, resp.Episodes)
+	return resp.Episodes
+}
+
 // GetSeasonEpisodes returns sorted episodes for a season, enriched from OMDB
 // for IMDB-identified shows (Cinemeta often omits episode titles).
 func GetSeasonEpisodes(m Meta, season int, sm SeriesMeta, omdbKey string) []Video {
@@ -518,30 +554,20 @@ func GetSeasonEpisodes(m Meta, season int, sm SeriesMeta, omdbKey string) []Vide
 	}
 
 	if m.Source != "anime" && strings.HasPrefix(m.ID, "tt") && omdbKey != "" {
-		var resp struct {
-			Episodes []struct {
-				Episode  string `json:"Episode"`
-				Title    string `json:"Title"`
-				Released string `json:"Released"`
-			} `json:"Episodes"`
-		}
-		u := fmt.Sprintf("%s/?i=%s&Season=%d&apikey=%s", urlOMDB, m.ID, season, omdbKey)
-		if GetJSON(u, &resp) == nil {
-			for _, e := range resp.Episodes {
-				n := 0
-				fmt.Sscanf(e.Episode, "%d", &n)
-				v, ok := byEp[n]
-				if !ok {
-					continue // not on the addon, so nothing to play
-				}
-				if e.Title != "" && e.Title != "N/A" {
-					v.Title = e.Title
-				}
-				if e.Released != "" && e.Released != "N/A" {
-					v.Released = e.Released
-				}
-				byEp[n] = v
+		for _, e := range omdbSeason(m.ID, season, omdbKey) {
+			n := 0
+			fmt.Sscanf(e.Episode, "%d", &n)
+			v, ok := byEp[n]
+			if !ok {
+				continue // not on the addon, so nothing to play
 			}
+			if e.Title != "" && e.Title != "N/A" {
+				v.Title = e.Title
+			}
+			if e.Released != "" && e.Released != "N/A" {
+				v.Released = e.Released
+			}
+			byEp[n] = v
 		}
 	}
 

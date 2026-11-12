@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ParseRelease reads the assorted date formats the metadata addons emit.
@@ -93,12 +94,12 @@ func CleanTitle(s string) string {
 	if s == "" {
 		return ""
 	}
-	if once, err := url.QueryUnescape(s); err == nil {
-		s = once
+	for range 2 { // some are escaped twice
+		if u, err := url.QueryUnescape(s); err == nil && utf8.ValidString(u) {
+			s = u
+		}
 	}
-	if twice, err := url.QueryUnescape(s); err == nil {
-		s = twice
-	}
+	s = CleanText(s) // %1b in a file name decodes to an escape
 	for _, ext := range []string{".mkv", ".mp4", ".avi", ".m4v", ".ts", ".mov", ".wmv"} {
 		if strings.HasSuffix(strings.ToLower(s), ext) {
 			s = s[:len(s)-len(ext)]

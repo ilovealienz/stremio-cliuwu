@@ -189,3 +189,19 @@ func TestRealMpvKindCommand(t *testing.T) {
 		return scale["data"] == 1.5 && delay["data"] == 2.0
 	})
 }
+
+// Without a runtime dir (always so on macOS) the socket goes in the app's own
+// state folder, not a shared /tmp, and that folder is made if it's missing.
+func TestRealMpvSocketWithoutRuntimeDir(t *testing.T) {
+	p := realMpv(t)
+	t.Setenv("XDG_RUNTIME_DIR", "")
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state"))
+	if dir := filepath.Dir(socketPath()); dir != store.StateDir() {
+		t.Fatalf("socket in %s", dir)
+	}
+	p.play(episodeReq(vid(40, 1), clip(t, 20)))
+	waitFor(t, "playing", 10*time.Second, func() bool { return p.State().Duration > 0 })
+	if fi, err := os.Stat(filepath.Dir(socketPath())); err != nil || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("socket folder: %v %v", fi.Mode(), err)
+	}
+}

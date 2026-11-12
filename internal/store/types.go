@@ -9,7 +9,7 @@ import (
 // configVersion is bumped whenever a new field needs a non-zero default.
 // Without this, adding a bool to the struct silently gives every existing
 // install `false`, because encoding/json just leaves absent fields alone.
-const configVersion = 15
+const configVersion = 16
 
 type Config struct {
 	Version          int    `json:"version"`
@@ -17,8 +17,8 @@ type Config struct {
 	PreferredQuality string `json:"preferred_quality"`
 	SubtitleLang     string `json:"subtitle_lang"`
 
-	// Terms that hide a stream from the picker. Substring, case-insensitive,
-	// matched against everything the addon says about it.
+	// Terms that hide a stream from the picker: whole words, any case, a
+	// trailing * matching the start of a word. See stremio.StreamBlocked.
 	Blocked        []string `json:"blocked,omitempty"`
 	HistoryMax     int      `json:"history_max"`
 	OmdbKey        string   `json:"omdb_key"`
@@ -28,6 +28,7 @@ type Config struct {
 	AutoResume     bool     `json:"auto_resume"`
 	CloseMpvOnExit bool     `json:"close_mpv_on_exit"`
 	CachedFirst    bool     `json:"cached_first"`
+	RetryLoads     bool     `json:"retry_loads"` // load a stream once more if it fails
 	Accent         string   `json:"accent"`
 	AutoInfo       bool     `json:"auto_info"`
 	Posters        bool     `json:"posters"`
@@ -123,6 +124,11 @@ func (c *Config) SetDefaults() bool {
 
 	if c.Version < 15 {
 		c.PreloadAhead = 3
+		changed = true
+	}
+
+	if c.Version < 16 {
+		c.RetryLoads = true
 		changed = true
 	}
 

@@ -64,11 +64,11 @@ func (s *seasonScreen) layout() {
 func (s *seasonScreen) syncInfo() tea.Cmd { return s.info.Show(s.show) }
 
 func (s *seasonScreen) Init() tea.Cmd {
-	id, m := s.id, s.show
+	id, m, addons := s.id, s.show, ctx.addons
 	return tea.Batch(
 		s.busy.start("fetching episode list…"),
 		func() tea.Msg {
-			sm := stremio.GetSeriesMeta(ctx.addons, m)
+			sm := stremio.GetSeriesMeta(addons, m)
 
 			// Season 0 is a real season — it's where specials, OVAs and
 			// recaps live. On a kitsu-backed series it opens a list of those
@@ -124,7 +124,7 @@ func (s *seasonScreen) rebuild() {
 		if season == 0 && len(specials) > 1 {
 			items[i] = Item{
 				Label: bold(seasonLabel(season)),
-				Badge: grey(fmt.Sprintf("%d titles", len(specials))),
+				Badge: grey(fmt.Sprintf("%d titles", len(specials)+min(1, len(looseSpecials(s.sm.Videos))))),
 			}
 			continue
 		}
@@ -317,6 +317,11 @@ type episodeScreen struct {
 	show   stremio.Meta
 	sm     stremio.SeriesMeta
 	season int
+	title  string // in place of the season's name
+
+	// s searches the highlighted title by name. For specials with no kitsu
+	// entry, whose episode number may not be the one releases use.
+	byName bool
 	eps    []stremio.Video
 
 	// Resume target, set when arriving from continue-watching.
@@ -355,16 +360,21 @@ func (s *episodeScreen) syncInfo() tea.Cmd {
 }
 
 func (s *episodeScreen) Init() tea.Cmd {
-	id, m, sm, season := s.id, s.show, s.sm, s.season
+	id, m, sm, season, key := s.id, s.show, s.sm, s.season, ctx.cfg.OmdbKey
 	return tea.Batch(
 		s.busy.start("loading episodes…"),
 		func() tea.Msg {
-			return episodesMsg{id: id, eps: stremio.GetSeasonEpisodes(m, season, sm, ctx.cfg.OmdbKey)}
+			return episodesMsg{id: id, eps: stremio.GetSeasonEpisodes(m, season, sm, key)}
 		},
 	)
 }
 
-func (s *episodeScreen) Title() string { return seasonLabel(s.season) }
+func (s *episodeScreen) Title() string {
+	if s.title != "" {
+		return s.title
+	}
+	return seasonLabel(s.season)
+}
 
 func (s *episodeScreen) Typing() bool { return s.list.Typing() }
 
@@ -375,8 +385,11 @@ func (s *episodeScreen) SetSize(w, h int) {
 }
 
 func (s *episodeScreen) Footer() string {
-	return withStatus(s.list.Status(), keyHint(
-		[2]string{"enter", "streams"},
+	keys := [][2]string{{"enter", "streams"}}
+	if s.byName {
+		keys = append(keys, [2]string{"s", "search by name"})
+	}
+	keys = append(keys,
 		[2]string{"i", "toggle info"},
 		[2]string{"f", "favourite season"},
 		[2]string{"w", "mark watched"},
@@ -385,7 +398,8 @@ func (s *episodeScreen) Footer() string {
 		[2]string{"p", "open full poster"},
 		[2]string{"I", "imdb"},
 		[2]string{"b/esc", "back"},
-	))
+	)
+	return withStatus(s.list.Status(), keyHint(keys...))
 }
 
 func (s *episodeScreen) rebuild() {
@@ -554,6 +568,10 @@ func (s *episodeScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 				return s, toast(seasonLabel(s.season) + " marked unwatched")
 			}
 			return s, toast(seasonLabel(s.season) + " marked watched")
+		case "s":
+			if i := s.list.Selected(); s.byName && i >= 0 && i < len(s.eps) && s.eps[i].Title != "" {
+				return s, push(newSearchScreenWith(s.eps[i].Title, "", false)) // all tabs: a live-action film is only on cinemeta
+			}
 		case "esc", "backspace":
 			return s, pop()
 		case "q":

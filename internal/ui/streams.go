@@ -87,6 +87,7 @@ func (s *streamScreen) Init() tea.Cmd { return s.load() }
 // dead, which for debrid results usually means the URL simply expired.
 func (s *streamScreen) reload() tea.Cmd {
 	stremio.InvalidateStreams(s.target.FetchID())
+	stremio.ForgetDownAddons()
 	return s.load()
 }
 
@@ -372,6 +373,8 @@ func playRequest(t store.StreamTarget, st stremio.Stream, resume float64) player
 		Langs:      stremio.FlagLangs(st.Name + "\n" + st.Title + "\n" + st.Description),
 		Addon:      st.Addon,
 		Size:       stremio.StreamBytes(st),
+
+		Retry: stremio.StreamCached(st) >= 0, // an uncached link fails the same way twice
 	}
 }
 
@@ -541,6 +544,9 @@ func (s *streamScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		if s.filter != "" {
 			s.list.SetQuery(s.filter)
 			s.filter = ""
+		}
+		if m.failed > 0 {
+			return s, toastErr(plural(m.failed, "addon") + " failed — R asks again")
 		}
 		return s, nil
 

@@ -19,11 +19,20 @@ BINARY="stremio-cliuwu"
 
 cd "$(dirname "$0")"
 
-# Derived from git, not hardcoded: a literal goes stale the moment you tag,
-# and every local build then claims the wrong version. On a tagged commit this
-# gives "0.4.3"; between tags, "0.4.3-5-gabc1234"; outside a repo, "dev".
+# Derived from git, not hardcoded. A tagged commit is its tag ("0.6.9.1").
+# Anything else is ahead of the newest release ("0.6.9.1-dev-abc1234"): the
+# release tags sit on main's squash commits, outside the working branch's
+# history, so describe alone would name an old tag. Outside a repo, "dev".
 # Override with VERSION=1.2.3 ./build.sh if you need to.
-VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
+if [ -z "${VERSION:-}" ]; then
+  if VERSION="$(git describe --tags --exact-match --dirty 2>/dev/null)"; then :
+  elif latest="$(git describe --tags "$(git rev-list --tags --max-count=1 2>/dev/null)" 2>/dev/null)"; then
+    VERSION="${latest}-dev-$(git rev-parse --short HEAD)"
+    git diff --quiet HEAD 2>/dev/null || VERSION="${VERSION}-dirty"
+  else
+    VERSION=dev
+  fi
+fi
 VERSION="${VERSION#v}"
 LDFLAGS="-s -w -X main.version=${VERSION}"
 

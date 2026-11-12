@@ -100,6 +100,13 @@ func TestPlayRequest(t *testing.T) {
 		e.NextVideoID != "tt9:1:2" || e.NextEpisode != 2 {
 		t.Fatalf("entry = %+v", e)
 	}
+
+	// Load failures are retried, except for a link that isn't cached yet.
+	for name, want := range map[string]bool{"[RD+] Torrentio": true, "Direct": true, "[RD download] Torrentio": false} {
+		if got := playRequest(target, stremio.Stream{URL: "u", Name: name}, 0).Retry; got != want {
+			t.Errorf("%s: retry %v", name, got)
+		}
+	}
 }
 
 func TestStreamListMarksUpNext(t *testing.T) {
@@ -178,5 +185,20 @@ func TestStreamHeaderFitsWidth(t *testing.T) {
 		if len(lines) > 20 {
 			t.Fatalf("width %d: %d lines for a 20 line screen", w, len(lines))
 		}
+	}
+}
+
+// A file from the debrid library is in your account, so it's cached and
+// gets the same retry as a cached stream.
+func TestLibraryFileRetries(t *testing.T) {
+	useCtx(t, &appCtx{cfg: &store.Config{}})
+	s := newFileListScreen(stremio.Meta{ID: "lib1", Name: "Pack"})
+	v := FileVideo{ID: "lib1:1", Title: "ep1.mkv"}
+	v.Streams = append(v.Streams, struct {
+		URL string `json:"url"`
+	}{URL: "u"})
+	s.videos = []FileVideo{v}
+	if !s.request(0).Retry {
+		t.Fatal("library file not retried")
 	}
 }

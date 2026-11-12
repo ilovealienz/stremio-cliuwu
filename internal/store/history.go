@@ -170,9 +170,20 @@ func (h *historyStore) load() {
 // reindex rebuilds the videoID lookup after loading.
 func (h *historyStore) reindex() {
 	h.byVideo = map[string]epRef{}
-	for _, sh := range h.data.Shows {
+	// A null show or episode only comes from a hand edit, but it would
+	// crash every launch, so drop it.
+	for id, sh := range h.data.Shows {
+		if sh == nil {
+			delete(h.data.Shows, id)
+			continue
+		}
 		if sh.Eps == nil {
 			sh.Eps = map[string]*epState{}
+		}
+		for k, st := range sh.Eps {
+			if st == nil {
+				delete(sh.Eps, k)
+			}
 		}
 	}
 	for _, r := range h.data.Recent {
@@ -756,34 +767,8 @@ func ContinueTarget() *ContinueItem {
 	// offer rather than an episode that doesn't exist.
 	if top.Type == "series" && top.NextVideoID != "" {
 		if sh := hist.data.Shows[top.ID]; sh != nil {
-			nextKey := epKey(top.NextSeason, top.NextEpisode)
-			st := sh.Eps[nextKey]
-
-			if st == nil || !st.W {
-				e := HistoryEntry{
-					Name: sh.Name, ID: top.ID, Type: sh.Type,
-					Source: sh.Source, Year: sh.Year,
-					Season: top.NextSeason, Episode: top.NextEpisode,
-					VideoID: top.NextVideoID, EpTitle: top.NextTitle,
-					EpisodeTotal: top.EpisodeTotal,
-				}
-				item := &ContinueItem{
-					Entry:     e,
-					NextUp:    true,
-					LastLabel: stremio.FmtEp(top.Season, top.Episode, top.VideoID),
-					Index:     top.NextEpisode,
-					Total:     top.EpisodeTotal,
-				}
-				if !stremio.VideoAired(stremio.Video{Released: top.NextReleased}) {
-					item.Airing = top.NextReleased
-				}
-				// Already started it — resume rather than announce it.
-				if st != nil && st.P > 0 {
-					item.NextUp = false
-					item.Position, item.Duration = st.P, st.D
-					item.Entry.Position, item.Entry.Duration = st.P, st.D
-				}
-				inProgressCache = item
+			if item, ok := nextUpItem(top, sh); ok {
+				inProgressCache = &item
 				return inProgressCache
 			}
 		}
@@ -796,6 +781,41 @@ func ContinueTarget() *ContinueItem {
 		}
 	}
 	return nil
+}
+
+// nextUpItem is the episode recorded as following e, unless it's watched
+// too. One you've started is offered as a resume.
+func nextUpItem(e HistoryEntry, sh *showState) (ContinueItem, bool) {
+	next := sh.Eps[epKey(e.NextSeason, e.NextEpisode)]
+	if next != nil && next.W {
+		return ContinueItem{}, false
+	}
+	total := e.EpisodeTotal
+	if e.NextSeason != e.Season {
+		total = 0 // that was the season just finished
+	}
+	item := ContinueItem{
+		Entry: HistoryEntry{
+			Name: sh.Name, ID: e.ID, Type: sh.Type,
+			Source: sh.Source, Year: sh.Year,
+			Season: e.NextSeason, Episode: e.NextEpisode,
+			VideoID: e.NextVideoID, EpTitle: e.NextTitle,
+			EpisodeTotal: total,
+		},
+		NextUp:    true,
+		LastLabel: stremio.FmtEp(e.Season, e.Episode, e.VideoID),
+		Index:     e.NextEpisode,
+		Total:     total,
+	}
+	if !stremio.VideoAired(stremio.Video{Released: e.NextReleased}) {
+		item.Airing = e.NextReleased
+	}
+	if next != nil && next.P > 0 {
+		item.NextUp = false
+		item.Position, item.Duration = next.P, next.D
+		item.Entry.Position, item.Entry.Duration = next.P, next.D
+	}
+	return item, true
 }
 
 // ContinueList returns the shows you're partway through, most recent first,
@@ -838,34 +858,9 @@ func ContinueList(n int) []ContinueItem {
 			// Same stored pointer the menu uses. A finished series records no
 			// next episode, so it simply drops out of the list.
 			seen[e.ID] = true
-
-			next := sh.Eps[epKey(e.NextSeason, e.NextEpisode)]
-			if next != nil && next.W {
-				continue // already seen it too
+			if item, ok := nextUpItem(e, sh); ok {
+				out = append(out, item)
 			}
-
-			item := ContinueItem{
-				Entry: HistoryEntry{
-					Name: sh.Name, ID: e.ID, Type: sh.Type,
-					Source: sh.Source, Year: sh.Year,
-					Season: e.NextSeason, Episode: e.NextEpisode,
-					VideoID: e.NextVideoID, EpTitle: e.NextTitle,
-					EpisodeTotal: e.EpisodeTotal,
-				},
-				NextUp:    true,
-				LastLabel: stremio.FmtEp(e.Season, e.Episode, e.VideoID),
-				Index:     e.NextEpisode,
-				Total:     e.EpisodeTotal,
-			}
-			if !stremio.VideoAired(stremio.Video{Released: e.NextReleased}) {
-				item.Airing = e.NextReleased
-			}
-			if next != nil && next.P > 0 {
-				item.NextUp = false
-				item.Position, item.Duration = next.P, next.D
-				item.Entry.Position, item.Entry.Duration = next.P, next.D
-			}
-			out = append(out, item)
 
 		default:
 			seen[e.ID] = true // finished film, nothing to continue

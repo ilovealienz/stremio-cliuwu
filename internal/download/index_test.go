@@ -3,6 +3,7 @@ package download
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"stremio-cliuwu/internal/store"
@@ -10,7 +11,7 @@ import (
 
 // The index is reloaded at launch, with disk deciding each entry's state.
 func TestIndexReload(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	freshState(t)
 	dir := t.TempDir()
 	done := filepath.Join(dir, "done.mkv")
 	partial := filepath.Join(dir, "partial.mkv")
@@ -31,10 +32,12 @@ func TestIndexReload(t *testing.T) {
 	}
 	d.save()
 
-	if fi, err := os.Stat(store.DownloadsFile()); err != nil || fi.Mode().Perm() != 0600 {
+	// Windows has no Unix modes to check.
+	unixMode := func(fi os.FileInfo) bool { return runtime.GOOS == "windows" || fi.Mode().Perm() == 0600 }
+	if fi, err := os.Stat(store.DownloadsFile()); err != nil || !unixMode(fi) {
 		t.Fatalf("index perms: %v %v", fi.Mode(), err)
 	}
-	if fi, err := os.Stat(infoPath(partial)); err != nil || fi.Mode().Perm() != 0600 {
+	if fi, err := os.Stat(infoPath(partial)); err != nil || !unixMode(fi) {
 		t.Fatalf("sidecar holds the stream URL, should be 0600: %v %v", fi.Mode(), err)
 	}
 

@@ -48,3 +48,16 @@ func TestExpandPatternFillsOnce(t *testing.T) {
 		}
 	}
 }
+
+// A failed rename takes its temporary file with it.
+func TestWriteAtomicCleansUp(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "taken")
+	os.MkdirAll(filepath.Join(target, "x"), 0o755) // a folder in the way
+	if err := WriteAtomic(target, []byte("{}"), 0o600); err == nil {
+		t.Fatal("wrote over a folder")
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, ".tmp-*")); len(left) > 0 {
+		t.Fatalf("left %v", left)
+	}
+}

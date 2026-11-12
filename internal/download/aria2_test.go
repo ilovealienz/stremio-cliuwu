@@ -84,8 +84,9 @@ func aria2Setup(t *testing.T) (*Downloader, string) {
 	on.Aria2 = true
 	store.UseConfig(on)
 	t.Cleanup(func() { store.UseConfig(saved) })
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
-	return New(), filepath.Join(t.TempDir(), "Show S01E01.mkv")
+	freshState(t)
+	path := filepath.Join(t.TempDir(), "Show S01E01.mkv")
+	return testDownloader(t), path
 }
 
 func waitFor(t *testing.T, what string, ok func() bool) {
@@ -239,6 +240,24 @@ func TestAria2ExpiredLink(t *testing.T) {
 	}
 	if _, err := os.Stat(controlPath(path)); err != nil {
 		t.Error("resume file gone after an expired link")
+	}
+}
+
+// An expired link answered with a 200 and an error page.
+func TestAria2WebPage(t *testing.T) {
+	d, path := aria2Setup(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte("<html>link expired</html>"))
+	}))
+	defer srv.Close()
+	d.Add("ep", srv.URL+"/ep.mkv", path)
+	waitFor(t, "failure", func() bool { return only(d).State == Failed || only(d).State == Done })
+	if err := only(d).Err; err == nil || !strings.Contains(err.Error(), "web page") {
+		t.Fatalf("error %v", err)
+	}
+	if _, err := os.Stat(path); err == nil {
+		t.Fatal("page saved as the video")
 	}
 }
 

@@ -6,9 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -75,12 +77,13 @@ func GetJSONTimeout(u string, out any, timeout time.Duration) error {
 	// 404, and the decoder then reports `invalid character '<'`, which tells
 	// you nothing about what went wrong. Peeking at the first byte costs
 	// nothing and turns it into something actionable.
-	body := bufio.NewReader(r.Body)
+	body := bufio.NewReader(&capped{r: r.Body, left: maxResponse})
 	if b, err := body.Peek(1); err == nil && (b[0] == '<') {
 		return fmt.Errorf("got a web page, not json — wrong url, or the addon has moved")
 	}
 
 	err = json.NewDecoder(body).Decode(out)
+	cleanStrings(reflect.ValueOf(out))
 
 	// A field whose type doesn't match isn't a reason to throw the response
 	// away. Addons disagree on whether runtime, imdbRating and version are
@@ -96,7 +99,34 @@ func GetJSONTimeout(u string, out any, timeout time.Duration) error {
 	if errors.As(err, &typeErr) {
 		return nil
 	}
+	if errors.Is(err, errTooBig) {
+		return fmt.Errorf("reply over %d MB — not a normal addon answer", maxResponse>>20)
+	}
 	return err
+}
+
+// maxResponse caps a reply. The biggest real ones (a long show's episode
+// list, a few hundred streams) are a few MB; a broken addon sending without
+// end would otherwise fill memory until the timeout.
+const maxResponse = 16 << 20
+
+var errTooBig = errors.New("reply too big")
+
+type capped struct {
+	r    io.Reader
+	left int64
+}
+
+func (c *capped) Read(p []byte) (int, error) {
+	if c.left <= 0 {
+		return 0, errTooBig
+	}
+	if int64(len(p)) > c.left {
+		p = p[:c.left]
+	}
+	n, err := c.r.Read(p)
+	c.left -= int64(n)
+	return n, err
 }
 
 // ── Streams ───────────────────────────────────────────────────────────────────
@@ -109,6 +139,18 @@ var cacheStreams = cache.New[[]Stream](5*time.Minute, 400)
 // streamFailed holds addons that just failed, so reopening the list doesn't
 // wait out the same timeout again.
 var streamFailed = cache.New[bool](30*time.Second, 400)
+
+// addonDown holds addons that timed out, so other episodes skip them for a
+// while instead of each waiting out the timeout. ForgetDownAddons asks again.
+var addonDown = cache.New[bool](2*time.Minute, 100)
+
+// ForgetDownAddons asks the addons that timed out again on the next fetch.
+func ForgetDownAddons() { addonDown.Clear() }
+
+func isTimeout(err error) bool {
+	var ne net.Error
+	return errors.Is(err, context.DeadlineExceeded) || errors.As(err, &ne) && ne.Timeout()
+}
 
 func streamKey(videoID, base string) string { return videoID + "\x00" + base }
 
@@ -124,7 +166,7 @@ type streamCall struct {
 	ok      bool
 }
 
-func fetchStreams(key, u string) ([]Stream, bool) {
+func fetchStreams(key, base, u string) ([]Stream, bool) {
 	streamFlight.mu.Lock()
 	if c, busy := streamFlight.calls[key]; busy {
 		streamFlight.mu.Unlock()
@@ -148,6 +190,9 @@ func fetchStreams(key, u string) ([]Stream, bool) {
 		c.streams, c.ok = resp.Streams, true
 	} else {
 		streamFailed.Set(key, true)
+		if isTimeout(err) {
+			addonDown.Set(base, true)
+		}
 	}
 
 	streamFlight.mu.Lock()
@@ -167,6 +212,19 @@ func InvalidateStreams(videoID string) {
 func RetryStreams(addons []Addon, mediaType, videoID string) ([]Stream, int) {
 	streamFailed.DeletePrefix(videoID + "\x00")
 	return GetStreams(addons, mediaType, videoID)
+}
+
+// ClearCaches forgets every addon response: catalogs, searches, series,
+// metas, subtitles and streams.
+func ClearCaches() {
+	cacheCatalog.Clear()
+	cacheSearch.Clear()
+	cacheSeries.Clear()
+	CacheMetaDetail.Clear()
+	CacheSubs.Clear()
+	cacheOmdb.Clear()
+	ClearStreams()
+	addonDown.Clear()
 }
 
 // ClearStreams drops every cached stream list and remembered failure.
@@ -209,11 +267,15 @@ func GetStreams(addons []Addon, mediaType, videoID string) ([]Stream, int) {
 			failed[i] = true
 			continue
 		}
+		if _, ok := addonDown.Get(addonBase(a)); ok {
+			failed[i] = true
+			continue
+		}
 		wg.Add(1)
 		go func(i int, a Addon) {
 			defer wg.Done()
 			u := fmt.Sprintf("%s/stream/%s/%s.json", addonBase(a), mediaType, url.PathEscape(videoID))
-			streams, ok := fetchStreams(key, u)
+			streams, ok := fetchStreams(key, addonBase(a), u)
 			results[i], failed[i] = streams, !ok
 		}(i, a)
 	}

@@ -212,13 +212,13 @@ func (a *app) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if ctx.player.Queued() != nil {
 			return a, nil
 		}
-		return a, a.next(m.Prev, true)
+		return a, a.next(a.asShown(m.Prev), true)
 
 	case player.EpisodeEndedMsg:
 		if ctx.player.Queued() != nil {
 			return a, nil
 		}
-		return a, a.next(m.Prev, false)
+		return a, a.next(a.asShown(m.Prev), false)
 
 	case autoPickMsg:
 		return a, a.autoPicked(m)
@@ -434,6 +434,16 @@ func (a *app) globalKey(k tea.KeyMsg) (tea.Cmd, bool) {
 		}
 	}
 	return nil, false
+}
+
+// asShown takes the filter and addon tab from the list of the episode that's
+// playing, when it's open: autoplay goes by what you see, not by what was set
+// when the stream was opened.
+func (a *app) asShown(prev player.PlayRequest) player.PlayRequest {
+	if cur, ok := a.top().(*streamScreen); ok && cur.loaded && cur.target.VideoID == prev.VideoID {
+		prev.Filter, prev.AddonTab = cur.list.Query(), cur.providerFilter()
+	}
+	return prev
 }
 
 // next is autoplay's pick when it's on, otherwise the next episode's list.

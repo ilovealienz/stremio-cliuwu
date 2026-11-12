@@ -43,7 +43,8 @@ func newSubsScreen(label string, q stremio.SubsQuery, shipped []stremio.Subtitle
 	l.Numbered = true
 
 	// Whatever came with the stream is already in hand, so it shows before
-	// any request goes out.
+	// any request goes out. A copy: the slice is the playing request's.
+	shipped = append([]stremio.Subtitle(nil), shipped...)
 	for i := range shipped {
 		shipped[i].Addon = "stream"
 	}
@@ -64,7 +65,7 @@ func (s *subsScreen) SetSize(w, h int) {
 }
 
 func (s *subsScreen) Init() tea.Cmd {
-	id, q, addons := s.id, s.query, ctx.addons
+	id, q, addons, lang := s.id, s.query, ctx.addons, ctx.cfg.SubtitleLang
 	shipped := s.subs
 
 	return tea.Batch(
@@ -72,7 +73,7 @@ func (s *subsScreen) Init() tea.Cmd {
 		func() tea.Msg {
 			return subsLoadedMsg{
 				id:   id,
-				subs: stremio.MergeSubtitles(shipped, stremio.GetSubtitles(addons, q, ctx.cfg.SubtitleLang), ctx.cfg.SubtitleLang),
+				subs: stremio.MergeSubtitles(shipped, stremio.GetSubtitles(addons, q, lang), lang),
 			}
 		},
 	)
@@ -83,7 +84,7 @@ func (s *subsScreen) Footer() string {
 	if len(s.langs) > 2 {
 		pairs = append(pairs, [2]string{"tab", "filter by language"})
 	}
-	pairs = append(pairs, [2]string{"R", "refetch streams"}, [2]string{"/", "filter"},
+	pairs = append(pairs, [2]string{"R", "refetch subtitles"}, [2]string{"/", "filter"},
 		[2]string{"b/esc", "back"})
 	return withStatus(s.list.Status(), keyHint(pairs...))
 }

@@ -515,7 +515,7 @@ func NameEpisode(name string) (season, first, last int, ok bool) {
 	if m[1] != "" {
 		season, first, last = n(m[1]), n(m[2]), n(m[2])
 		if m[3] != "" {
-			last = n(m[3])
+			last = n(m[3]) // backwards, it matches no episode: a bad name is skipped
 		}
 	} else {
 		season, first, last = n(m[4]), n(m[5]), n(m[5])

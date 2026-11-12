@@ -206,6 +206,18 @@ func groupSpecials(videos []stremio.Video) []specialGroup {
 	return out
 }
 
+// looseSpecials is season 0's videos with no kitsu entry of their own, often
+// films. The specials screen collects them under one row.
+func looseSpecials(videos []stremio.Video) []stremio.Video {
+	var out []stremio.Video
+	for _, v := range videos {
+		if v.Season == 0 && v.KitsuID == "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
 // groupTitle is what a collection's episode names have in common, cut back to
 // something that reads as a title — a placeholder until the real name is
 // fetched, and the fallback if that fails.

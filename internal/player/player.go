@@ -35,15 +35,16 @@ import (
 // picking a stream for the next episode, the player emits EpisodeEndedMsg and
 // the TUI opens that episode's stream list — see EpisodeEndedMsg below.
 
+// socketPath is per user: a shared one could be taken by another account,
+// which would then be sent our stream links, debrid keys and all.
 func socketPath() string {
 	if runtime.GOOS == "windows" {
-		return `\\.\pipe\stremio-cliuwu`
+		return `\\.\pipe\stremio-cliuwu-` + os.Getenv("USERNAME")
 	}
-	// The runtime dir is per user; /tmp is shared, so it's only the fallback.
 	if dir := os.Getenv("XDG_RUNTIME_DIR"); filepath.IsAbs(dir) {
 		return filepath.Join(dir, "stremio-cliuwu.sock")
 	}
-	return "/tmp/stremio-cliuwu.sock"
+	return filepath.Join(store.StateDir(), "mpv.sock") // macOS has no runtime dir
 }
 
 var errNoMpv = errors.New("mpv is not running")
@@ -119,8 +120,6 @@ func (s State) Frac() float64 {
 	return s.Pos / s.Duration
 }
 
-func (s State) Percent() float64 { return s.Frac() * 100 }
-
 // ── Play request ──────────────────────────────────────────────────────────────
 
 type PlayRequest struct {
@@ -142,6 +141,10 @@ type PlayRequest struct {
 	Subs      []stremio.Subtitle // shipped with the stream itself
 
 	Auto bool // queued by autoplay rather than by hand
+
+	// Load the link once more if it fails or turns out to be a status clip.
+	// A debrid link can fail once and work the second time.
+	Retry bool
 
 	// How the stream was picked, so autoplay can pick the next one the same way.
 	BingeGroup string
@@ -180,8 +183,10 @@ type Player struct {
 	kindSent   bool         // the kind's mpv command has gone to this mpv window
 	lastSave   time.Time    // throttles history writes
 	lastEmit   int          // last whole second pushed to the UI
+	seekedAt   time.Time    // mpv's last seek
 
 	start func(PlayRequest) // plays a request off the calling goroutine; tests swap it
+	sink  func(tea.Msg)     // tests catch messages here instead of a program
 }
 
 func New(cfg store.Config) *Player {
@@ -198,7 +203,14 @@ func New(cfg store.Config) *Player {
 
 func (p *Player) Attach(prog *tea.Program) { p.prog = prog }
 
-func (p *Player) SetConfig(cfg store.Config) { p.mu.Lock(); p.cfg = cfg; p.mu.Unlock() }
+func (p *Player) SetConfig(cfg store.Config) {
+	p.mu.Lock()
+	if cfg.Autoplay && !p.cfg.Autoplay && p.queued == nil {
+		p.prefetched = false // look ahead again, now for autoplay
+	}
+	p.cfg = cfg
+	p.mu.Unlock()
+}
 
 func hasNext(q *stremio.EpQueue, cfg store.Config) bool {
 	_, ok := q.Next(cfg.NextSeason)
@@ -206,6 +218,10 @@ func hasNext(q *stremio.EpQueue, cfg store.Config) bool {
 }
 
 func (p *Player) emit(msg tea.Msg) {
+	if p.sink != nil {
+		p.sink(msg)
+		return
+	}
 	if p.prog != nil {
 		p.prog.Send(msg)
 	}
@@ -249,7 +265,7 @@ func (p *Player) Queue(req PlayRequest) (started bool) {
 // and started reports so.
 func (p *Player) QueueAuto(req PlayRequest, after string) (ok, started bool) {
 	p.mu.Lock()
-	if p.now == nil || p.now.VideoID != after || p.queued != nil || p.noAuto {
+	if p.now == nil || p.now.VideoID != after || p.queued != nil || p.noAuto || p.clip {
 		p.mu.Unlock()
 		return false, false
 	}
@@ -388,6 +404,7 @@ func (p *Player) pollPos(c net.Conn) {
 
 func (p *Player) spawn() error {
 	if runtime.GOOS != "windows" {
+		os.MkdirAll(filepath.Dir(socketPath()), 0700)
 		os.Remove(socketPath())
 	}
 	p.mu.Lock()
@@ -624,6 +641,10 @@ func (p *Player) dispatch(m map[string]any) {
 		p.onProperty(name, m["data"])
 	case "file-loaded":
 		p.onFileLoaded()
+	case "seek":
+		p.mu.Lock()
+		p.seekedAt = time.Now()
+		p.mu.Unlock()
 	case "playback-restart":
 		p.mu.Lock()
 		p.restarted = !p.replacing
@@ -668,8 +689,14 @@ func (p *Player) property(name string, data any, asked *PlayRequest) {
 	}
 
 	p.state.ErrorClip = isErrorClip(p.now, p.state.Duration)
+	var again *PlayRequest
 	if p.state.ErrorClip && !p.replacing {
-		p.markErrorClip()
+		if again = p.takeRetry(); again == nil {
+			p.markErrorClip()
+		}
+	} else if p.clip && !p.state.ErrorClip {
+		// A stream whose length mpv learns as it plays looked short at first.
+		p.clip, p.ended = false, false
 	}
 	addHist := p.takeHistory()
 	kindCmd := p.takeKindCommand()
@@ -701,6 +728,10 @@ func (p *Player) property(name string, data any, asked *PlayRequest) {
 	}
 	p.mu.Unlock()
 
+	if again != nil {
+		p.retry(*again)
+		return
+	}
 	if addHist {
 		store.AddHistory(now.Entry, histMax)
 	}
@@ -786,14 +817,22 @@ func (p *Player) onFileLoaded() {
 	seek := p.seekTo
 	p.seekTo = 0
 	// The duration can arrive before the file counts as loaded.
+	var again *PlayRequest
 	if p.state.ErrorClip {
-		p.markErrorClip()
+		if again = p.takeRetry(); again == nil {
+			p.markErrorClip()
+		}
 	}
 	addHist := p.takeHistory()
 	histMax := p.cfg.HistoryMax
 	now := p.now
 	st := p.state
 	p.mu.Unlock()
+
+	if again != nil {
+		p.retry(*again)
+		return
+	}
 
 	if addHist {
 		store.AddHistory(now.Entry, histMax)
@@ -836,6 +875,9 @@ func (p *Player) onEndFile(reason string) {
 	autoNext := cfg.AutoNext || cfg.Autoplay
 	prefetched := p.prefetched
 	queued := p.queued
+	// A seek to the end from the ending (a skip-outro key) ends the file
+	// before the once-a-second position read catches up.
+	skipped := time.Since(p.seekedAt) < 2*time.Second && st.Pos >= 0.75*st.Duration
 	p.mu.Unlock()
 
 	if now == nil {
@@ -855,7 +897,7 @@ func (p *Player) onEndFile(reason string) {
 	switch reason {
 	case "eof":
 		// mpv also reports a dropped connection as the end of the file.
-		if st.Duration <= 0 || !store.IsWatchedAt(st.Pos, st.Duration) {
+		if st.Duration <= 0 || !skipped && !store.IsWatchedAt(st.Pos, st.Duration) {
 			record(now, st)
 			p.endEarly(*now, st.Pos)
 			return
@@ -900,7 +942,13 @@ func (p *Player) onEndFile(reason string) {
 		// bad, so what you want is a different stream for the same episode,
 		// which is where you already are.
 		p.mu.Lock()
+		if again := p.takeRetry(); again != nil {
+			p.mu.Unlock()
+			p.retry(*again)
+			return
+		}
 		p.state.Loading = false
+		p.ended = true // nothing to wait behind: n plays straight away
 		p.mu.Unlock()
 		p.emit(ErrMsg{Err: errors.New("mpv couldn't play that stream — R to refetch, or pick another")})
 		p.emit(StateMsg{State: p.State()})
@@ -928,15 +976,31 @@ func (p *Player) endEarly(req PlayRequest, pos float64) {
 	p.emit(StateMsg{State: p.State()}) // screens re-read the saved position
 }
 
+// takeRetry returns the current request to load again, once. Callers hold
+// the lock.
+func (p *Player) takeRetry() *PlayRequest {
+	if p.now == nil || !p.now.Retry || !p.cfg.RetryLoads {
+		return nil
+	}
+	p.now.Retry = false
+	p.replacing = true // the clip's events until then aren't the end of anything
+	req := *p.now
+	return &req
+}
+
+func (p *Player) retry(req PlayRequest) {
+	p.emit(NoticeMsg{Text: "didn't load — trying once more"})
+	p.start(req)
+}
+
 // markErrorClip drops anything queued behind a status clip, once per file.
 // Callers hold the lock.
 func (p *Player) markErrorClip() {
 	if p.clip {
 		return
 	}
-	p.clip = true
+	p.clip = true // also stops an autoplay pick still on its way
 	p.queued = nil
-	p.noAuto = true // an autoplay pick still on its way mustn't start
 	p.state.NextLabel = ""
 	p.ended = true // nothing worth waiting for: n plays straight away
 }
@@ -968,6 +1032,7 @@ func (p *Player) play(req PlayRequest) tea.Msg {
 	prev, prevSt := p.now, p.state
 	p.replacing = true
 	p.prefetched = false
+	p.seekedAt = time.Time{}
 	p.historied = false
 	p.clip = false
 	p.restarted = false

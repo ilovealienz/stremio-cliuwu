@@ -358,10 +358,11 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.busy.stop()
 		s.loaded = true
 		if m.err != nil {
-			if s.loadingMore {
-				s.loadingMore = false // or the row stays on loading… and enter can't ask again
-				s.rebuild()
+			if len(s.metas) == 0 {
+				s.list.Empty = "couldn't load — " + m.err.Error()
 			}
+			s.loadingMore = false // or the row stays on loading… and enter can't ask again
+			s.rebuild()
 			return s, toastErr(m.err.Error())
 		}
 		was := len(s.metas)
@@ -380,7 +381,7 @@ func (s *catalogScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 			seen[mt.ID] = true
 			s.metas = append(s.metas, mt)
 		}
-		s.hasMore = m.hasMore && len(m.metas) > 0
+		s.hasMore = m.hasMore && len(s.metas) > was // an addon that ignores skip sends the same page again
 		s.loadingMore = false
 		s.rebuild()
 
@@ -477,6 +478,7 @@ func (s *catalogScreen) View() string {
 type searchMsg struct {
 	id    poster.AsyncID
 	metas []stremio.Meta
+	err   error // every search failed
 }
 
 type searchScreen struct {
@@ -548,7 +550,10 @@ func (s *searchScreen) Init() tea.Cmd {
 	addons := ctx.addons
 	return tea.Batch(
 		s.busy.start("searching…"),
-		func() tea.Msg { return searchMsg{id: id, metas: stremio.Search(addons, q)} },
+		func() tea.Msg {
+			metas, err := stremio.Search(addons, q)
+			return searchMsg{id: id, metas: metas, err: err}
+		},
 	)
 }
 
@@ -585,6 +590,9 @@ func (s *searchScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.busy.stop()
 		s.loaded = true
 		s.metas = m.metas
+		if m.err != nil {
+			s.list.Empty = "couldn't search — " + m.err.Error()
+		}
 		s.collectCats()
 
 		// Preselected category, if that kind came back at all.

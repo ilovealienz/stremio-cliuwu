@@ -85,15 +85,16 @@ func StreamBytes(s Stream) int64 {
 // Torrentio uses ⚡ plus a "[RD+]"-style provider tag; ⏳ means it would have to
 // be downloaded first.
 // Torrentio marks a debrid result "[TB+]" when it's ready to stream and
-// "[TB download]" when it isn't, per provider. Both are matched precisely
-// rather than by searching for the word "download" anywhere in the row — a
-// release named ...WEB-DL.Download.Edition would otherwise be sorted to the
-// bottom and shown with an hourglass it hasn't earned.
+// "[TB download]" when it isn't, per provider, and Comet "[TB⚡]" and "[TB⬇]".
+// These are matched precisely rather than by searching for the word
+// "download" anywhere in the row — a release named
+// ...WEB-DL.Download.Edition would otherwise be sorted to the bottom and
+// shown with an hourglass it hasn't earned.
 const debridProviders = `RD|TB|AD|PM|DL|OC|PR|EC`
 
 var (
 	cachedProviderRe  = regexp.MustCompile(`\[(` + debridProviders + `)\+\]`)
-	pendingProviderRe = regexp.MustCompile(`(?i)\[(` + debridProviders + `)\s+download\]`)
+	pendingProviderRe = regexp.MustCompile(`(?i)\[(` + debridProviders + `)(\s+download\]|\s*\x{2b07})`)
 )
 
 // StreamCached classifies a stream: 1 cached, -1 explicitly not cached,

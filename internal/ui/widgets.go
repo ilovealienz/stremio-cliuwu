@@ -1,12 +1,12 @@
 package ui
 
 import (
-	"github.com/charmbracelet/lipgloss"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/spinner"
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 // ── Busy indicator ────────────────────────────────────────────────────────────
@@ -132,10 +132,6 @@ type confirmScreen struct {
 
 	// defaultNo flips the default from yes, so enter picks "no" instead.
 	defaultNo bool
-}
-
-func newConfirm(title, message string, onYes func() tea.Cmd) *confirmScreen {
-	return &confirmScreen{title: title, message: message, onYes: onYes}
 }
 
 // newDestructive defaults to "no", so enter on a confirm that deletes

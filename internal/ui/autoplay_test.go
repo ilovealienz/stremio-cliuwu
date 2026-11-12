@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -85,7 +86,7 @@ func TestToggleAutoplay(t *testing.T) {
 	if ctx.player.Queued() == nil {
 		t.Fatal("turning autoplay off removed a hand-queued stream")
 	}
-	if cmd := (&app{}).autoPicked(autoPickMsg{pick: stremio.Stream{URL: "http://x/a"}, ok: true}); cmd != nil {
+	if cmd := (&app{}).autoPicked(autoPickMsg{pick: stremio.Stream{URL: "http://x/a"}}); cmd != nil {
 		t.Fatal("a pick that landed after turning autoplay off still did something")
 	}
 }
@@ -416,5 +417,158 @@ func TestPickStreamIgnoresNextSeasonTitle(t *testing.T) {
 	prev := player.PlayRequest{Queue: q, Release: "Show S01E12 Finale 1080p AMZN WEB-DL DDP5 1 H 264-NTb.mkv"}
 	if _, ok := pickStream([]stremio.Stream{next}, prev, store.Config{NextSeason: true}); !ok {
 		t.Fatal("a season premiere titled Dubbed stopped autoplay")
+	}
+}
+
+// A daily show's next episode skips a release dated another week, whichever
+// way the air date is written: addons send a timestamp, OMDb a plain date.
+func TestPickStreamDailyDate(t *testing.T) {
+	for _, aired := range []string{"2024-03-05T00:00:00.000Z", "2024-03-05"} {
+		q := &stremio.EpQueue{Season: 2024, Episodes: []stremio.Video{
+			{ID: "a", Season: 2024, Episode: 40, Released: "2024-03-04"},
+			{ID: "b", Season: 2024, Episode: 41, Released: aired}}}
+		mk := func(f string) stremio.Stream {
+			st := stream("A", "1080p", "")
+			st.URL, st.BehaviorHints.Filename = "http://x/"+f, f
+			return st
+		}
+		wrong := mk("The.Daily.Show.2024.03.12.1080p.WEB.h264-GRP.mkv")
+		right := mk("The.Daily.Show.2024.03.05.1080p.WEB.h264-OTHER.mkv")
+		prev := player.PlayRequest{Queue: q, Release: "The.Daily.Show.2024.03.04.1080p.WEB.h264-GRP.mkv"}
+		if st, _ := pickStream([]stremio.Stream{wrong, right}, prev, store.Config{}); st.URL != right.URL {
+			t.Errorf("aired %q: picked %q", aired, st.BehaviorHints.Filename)
+		}
+	}
+}
+
+// Haikyuu's season 1 titles, which Kitsune puts in its release names.
+var haikyuTitles = []string{"The End & the Beginning", "Karasuno High School Volleyball Club", "The Formidable Ally", "The View From the Summit", "A Coward's Anxiety", "An Interesting Team", "Versus the Great King", `He Who Is Called "Ace"`, "A Toss to the Ace", "Yearning", "Decision", "The Neko-Karasu Reunion", "Rival", "Formidable Opponents", "Revival", "Winners and Losers", "The Iron Wall", "Guarding Your Back", "Conductors", "Oikawa Toru Is Not a Genius", "Senpai's True Abilities", "Evolution", "The Point That Changes the Momentum", `Removing the "Solitary King"`, "The Third Day"}
+
+// tioStream is a Torrentio TorBox result, cached or not.
+func tioStream(cached bool, title, file string) stremio.Stream {
+	tag := "[TB download] Torrentio\n1080p"
+	if cached {
+		tag = "[TB+] Torrentio\n1080p"
+	}
+	st := stremio.Stream{Addon: "Torrentio TB", Name: tag, Title: title + "\n👤 9 💾 1.43 GB ⚙️ ThePirateBay", URL: "http://x/" + file}
+	st.BehaviorHints.Filename = file
+	st.BehaviorHints.BingeGroup = "torrentio|1080p|WEB-DL|DUAL|h264"
+	return st
+}
+
+// haikyuStreams is episode e of season 1 as Torrentio lists it: Kitsune's
+// dual-audio WEB-DL, a cached BD pack and a cached subbed release.
+func haikyuStreams(e int, kitsuneCached bool) []stremio.Stream {
+	k := fmt.Sprintf("Haikyu S01E%02d %s 1080p CR WEB-DL DUAL DDP2 0 H 264-Kitsune", e, haikyuTitles[e-1])
+	return []stremio.Stream{
+		tioStream(true, "[Judas] Haikyuu!! (Seasons 1-4 + OADs) [BD 1080p][HEVC x265 10bit][Dual-Audio][Eng-Subs]", fmt.Sprintf("[Judas] Haikyuu!! - S01E%02d.mkv", e)),
+		tioStream(kitsuneCached, k, k+".mkv"),
+		tioStream(true, fmt.Sprintf("[SubsPlease] Haikyuu!! - %02d (1080p) [ABCD1234]", e), fmt.Sprintf("[SubsPlease] Haikyuu!! - %02d (1080p) [ABCD1234].mkv", e)),
+	}
+}
+
+// haikyuPrev is Kitsune's episode e having been picked from tab and filter.
+func haikyuPrev(e int, tab, filter string) player.PlayRequest {
+	var eps []stremio.Video
+	for n := 1; n <= 25; n++ {
+		eps = append(eps, stremio.Video{ID: fmt.Sprintf("tt3398540:1:%d", n), Season: 1, Episode: n, Title: haikyuTitles[n-1], Released: "2014-04-06T00:00:00.000Z"})
+	}
+	q := &stremio.EpQueue{Show: stremio.Meta{ID: "tt3398540", Name: "Haikyuu!!", Type: "series"}, Season: 1, Episodes: eps, Index: e - 1}
+	t, _ := queueTarget(q, true)
+	req := playRequest(t, haikyuStreams(e, true)[1], 0)
+	req.Filter, req.AddonTab = filter, tab
+	return req
+}
+
+// When autoplay can't pick, it says why, so the "next up" toast tells you.
+func TestPickWhy(t *testing.T) {
+	cfg := store.Config{Autoplay: true, CachedFirst: true, PreferredQuality: "1080p"}
+	useCtx(t, &appCtx{cfg: &cfg})
+	kitsune := func(why string) func(stremio.Stream, string) bool {
+		return func(st stremio.Stream, got string) bool {
+			return got == why && (why != "" || strings.Contains(st.URL, "Kitsune"))
+		}
+	}
+	other := stremio.Stream{Addon: "AIOStreams", Name: "AIO 1080p", Title: "x", URL: "http://x/aio"}
+	for _, c := range []struct {
+		name    string
+		prev    player.PlayRequest
+		streams []stremio.Stream
+		ok      func(stremio.Stream, string) bool
+	}{
+		{"cached", haikyuPrev(15, "Torrentio TB", ""), haikyuStreams(16, true), kitsune("")},
+		{"not cached yet", haikyuPrev(15, "Torrentio TB", ""), haikyuStreams(16, false), kitsune("your version isn't cached yet")},
+		{"filter leaves only uncached", haikyuPrev(15, "Torrentio TB", "kitsune"), haikyuStreams(16, false), kitsune("your version isn't cached yet")},
+		{"filter keeps cached", haikyuPrev(15, "Torrentio TB", "kitsune"), haikyuStreams(16, true), kitsune("")},
+		{"filter finds nothing", haikyuPrev(15, "", "kitsune"), haikyuStreams(16, true)[:1], kitsune(`nothing matches "kitsune"`)},
+		{"tab finds nothing", haikyuPrev(15, "Torrentio TB", ""), []stremio.Stream{other}, kitsune("nothing from Torrentio TB")},
+		{"other episode", haikyuPrev(15, "", ""), haikyuStreams(17, true)[1:2], kitsune("only other episodes or batches")},
+		{"no streams", haikyuPrev(15, "", ""), nil, kitsune("no streams")},
+	} {
+		st, why := pickWhy(c.streams, c.prev, cfg)
+		if !c.ok(st, why) {
+			t.Errorf("%s: got %q, %q", c.name, st.BehaviorHints.Filename, why)
+		}
+	}
+}
+
+// Autoplay goes by the filter and tab on the playing episode's list.
+func TestAutoplayUsesTheListShown(t *testing.T) {
+	cfg := store.Config{}
+	useCtx(t, &appCtx{cfg: &cfg})
+	prev := haikyuPrev(15, "Torrentio TB", "kitsune")
+	s := newStreamScreen(store.StreamTarget{VideoID: prev.VideoID})
+	s.loaded = true
+	s.providers, s.provIdx = []string{"all", "Torrentio TB", "AIOStreams"}, 2
+	s.list.SetQuery("dual")
+	a := &app{stack: []screen{s}}
+
+	if got := a.asShown(prev); got.Filter != "dual" || got.AddonTab != "AIOStreams" {
+		t.Fatalf("got filter %q tab %q", got.Filter, got.AddonTab)
+	}
+	s.list.SetQuery("") // esc cleared it
+	s.provIdx = 0
+	if got := a.asShown(prev); got.Filter != "" || got.AddonTab != "" {
+		t.Fatalf("cleared, got filter %q tab %q", got.Filter, got.AddonTab)
+	}
+	s.target.VideoID = "another episode"
+	if got := a.asShown(prev); got.Filter != "kitsune" || got.AddonTab != "Torrentio TB" {
+		t.Fatal("took another episode's list")
+	}
+}
+
+// A big Torrentio list: 300 streams, a third of them Kitsune-like, picked from
+// the way autoplay does near the end of an episode.
+func BenchmarkPickWhy(b *testing.B) {
+	cfg := store.Config{Autoplay: true, CachedFirst: true, PreferredQuality: "1080p"}
+	saved := ctx
+	ctx = &appCtx{cfg: &cfg}
+	defer func() { ctx = saved }()
+	prev := haikyuPrev(15, "", "")
+	var streams []stremio.Stream
+	for i := range 100 {
+		for _, st := range haikyuStreams(16, i%2 == 0) {
+			st.URL += fmt.Sprint(i)
+			streams = append(streams, st)
+		}
+	}
+	b.ReportAllocs()
+	for range b.N {
+		pickWhy(streams, prev, cfg)
+	}
+}
+
+// A name whose episode range runs backwards is a bad name, not a range: it
+// matches no episode, so autoplay skips it.
+func TestBackwardsRangeIsSkipped(t *testing.T) {
+	v, was := stremio.Video{Season: 1, Episode: 5}, stremio.Video{Season: 1, Episode: 4}
+	for name, other := range map[string]bool{
+		"Show.S01E05E03.1080p.mkv": true,
+		"Show.S01E05E06.1080p.mkv": false,
+		"Show.S01E05.1080p.mkv":    false,
+	} {
+		if got := otherEpisode(name, v, was, time.Time{}); got != other {
+			t.Errorf("%s: other episode %v, want %v", name, got, other)
+		}
 	}
 }

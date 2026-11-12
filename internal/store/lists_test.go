@@ -3,12 +3,13 @@ package store
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"stremio-cliuwu/internal/stremio"
 )
 
-func tempData(t *testing.T) {
+func tempData(t testing.TB) {
 	dir := t.TempDir()
 	for _, v := range []string{"XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "APPDATA"} {
 		t.Setenv(v, dir)
@@ -58,7 +59,8 @@ func TestAddonRefEditing(t *testing.T) {
 	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("refs = %v", got)
 	}
-	if fi, err := os.Stat(AddonsFile()); err != nil || fi.Mode().Perm() != 0600 {
+	// Windows has no Unix modes to check.
+	if fi, err := os.Stat(AddonsFile()); err != nil || runtime.GOOS != "windows" && fi.Mode().Perm() != 0600 {
 		t.Fatalf("addons.json should be 0600 (it can hold debrid keys): %v %v", fi.Mode(), err)
 	}
 }
@@ -90,15 +92,20 @@ func TestFavourites(t *testing.T) {
 func TestExpandPath(t *testing.T) {
 	home, _ := os.UserHomeDir()
 	t.Setenv("MEDIA", "/srv/media")
-	for in, want := range map[string]string{
+	cases := map[string]string{
 		"":                "",
 		"  ~  ":           home,
 		"~/Videos":        filepath.Join(home, "Videos"),
 		"$MEDIA/films/":   "/srv/media/films",
 		"/a/../b/./c":     "/b/c",
 		"relative/dir//x": "relative/dir/x",
-	} {
-		if got := ExpandPath(in); got != want {
+	}
+	if runtime.GOOS == "windows" {
+		cases["%MEDIA%/films"] = "/srv/media/films"
+	}
+	for in, want := range cases {
+		// Compared with forward slashes: Clean gives backslashes on Windows.
+		if got := ExpandPath(in); filepath.ToSlash(got) != filepath.ToSlash(want) {
 			t.Errorf("ExpandPath(%q) = %q, want %q", in, got, want)
 		}
 	}
@@ -195,5 +202,57 @@ func TestRecentLimit(t *testing.T) {
 	}
 	if len(EpisodeStates("tt7")) != 5 {
 		t.Fatal("watched state trimmed with the list")
+	}
+}
+
+func TestContinue(t *testing.T) {
+	tempData(t)
+	old := hist
+	hist = &historyStore{}
+	defer func() { hist = old }()
+	watched := func(e HistoryEntry) {
+		AddHistory(e, 300)
+		UpdatePosition(e.VideoID, 1440, 1440)
+	}
+	show := HistoryEntry{Name: "Show", ID: "tt9", Type: "series", Season: 1, EpisodeTotal: 12}
+
+	// Mid-season: the next episode, with the season's count.
+	e := show
+	e.Episode, e.VideoID, e.NextVideoID, e.NextSeason, e.NextEpisode = 5, "tt9:1:5", "tt9:1:6", 1, 6
+	watched(e)
+	InvalidateInProgress()
+	c := ContinueTarget()
+	if c == nil || !c.NextUp || c.Entry.VideoID != "tt9:1:6" || c.Total != 12 || c.LastLabel != "S01E05" {
+		t.Fatalf("next up: %+v", c)
+	}
+	if l := ContinueList(5); len(l) != 1 || l[0].Entry.VideoID != "tt9:1:6" {
+		t.Fatalf("list: %+v", l)
+	}
+
+	// Started it, on another day: resume, not announce.
+	hist.data.Shows["tt9"].Eps[epKey(1, 6)] = &epState{P: 300, D: 1440}
+	InvalidateInProgress()
+	if c := ContinueTarget(); c == nil || c.NextUp || c.Position != 300 {
+		t.Fatalf("started next: %+v", c)
+	}
+
+	// Season finale: season 2 starts, and season 1's count isn't its count.
+	e = show
+	e.Episode, e.VideoID, e.NextVideoID, e.NextSeason, e.NextEpisode = 12, "tt9:1:12", "tt9:2:1", 2, 1
+	watched(e)
+	InvalidateInProgress()
+	c = ContinueTarget()
+	if c == nil || c.Entry.VideoID != "tt9:2:1" || c.Total != 0 || c.Entry.EpisodeTotal != 0 {
+		t.Fatalf("next season: %+v", c)
+	}
+	if l := ContinueList(5); len(l) != 1 || l[0].Total != 0 {
+		t.Fatalf("list next season: %+v", l)
+	}
+
+	// Seen that too: nothing to continue.
+	watched(HistoryEntry{Name: "Show", ID: "tt9", Type: "series", Season: 2, Episode: 1, VideoID: "tt9:2:1"})
+	InvalidateInProgress()
+	if c := ContinueTarget(); c != nil {
+		t.Fatalf("nothing left, got %+v", c)
 	}
 }

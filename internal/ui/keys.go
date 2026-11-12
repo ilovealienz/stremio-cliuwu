@@ -29,6 +29,7 @@ var keyDetail = map[string]string{
 	"enter|play":                 "play the highlighted stream",
 	"enter|streams":              "list streams for this episode",
 	"enter|episodes":             "list episodes in this season",
+	"s|search by name":           "find this special as its own title; releases may number it differently",
 	"enter|open":                 "open the highlighted item",
 	"enter|resume":               "carry on from where you left off",
 	"|resume from the panel":     "carry on with one of the shows listed on the right",

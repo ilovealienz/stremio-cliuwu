@@ -1,7 +1,11 @@
 package player
 
 import (
+	"fmt"
+	"strings"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"stremio-cliuwu/internal/store"
 	"stremio-cliuwu/internal/stremio"
@@ -98,6 +102,80 @@ func TestFinaleLooksAheadOnlyAcrossSeasons(t *testing.T) {
 		p.onProperty("time-pos", 1430.0)
 		if p.prefetched != cross {
 			t.Errorf("continue into next season %v: looked ahead %v", cross, p.prefetched)
+		}
+	}
+}
+
+func TestClipBlocksAutoUntilItGrows(t *testing.T) {
+	p := New(store.Config{})
+	req := episode("clipshow", "clipshow:1:1")
+	playing(p, req)
+	p.property("duration", 20.0, nil)
+	if ok, _ := p.QueueAuto(PlayRequest{VideoID: "clipshow:1:2"}, req.VideoID); ok {
+		t.Fatal("an autoplay pick queued behind an error clip")
+	}
+	p.property("duration", 1400.0, nil) // the length was still coming in
+	if ok, _ := p.QueueAuto(PlayRequest{VideoID: "clipshow:1:2"}, req.VideoID); !ok {
+		t.Fatal("still blocked once the file proved long enough")
+	}
+	p.Unqueue()
+	p.property("duration", 1440.0, nil)
+	if ok, _ := p.QueueAuto(PlayRequest{VideoID: "clipshow:1:2"}, req.VideoID); ok {
+		t.Fatal("a slot you cleared was refilled")
+	}
+}
+
+func TestAutoplayOnLooksAheadAgain(t *testing.T) {
+	p := New(store.Config{AutoNext: true})
+	p.prefetched = true // open next episode already looked
+	p.SetConfig(store.Config{AutoNext: true, Autoplay: true})
+	if p.prefetched {
+		t.Fatal("turning autoplay on didn't look ahead again")
+	}
+	p.prefetched = true
+	p.queued = &PlayRequest{VideoID: "mine"}
+	p.SetConfig(store.Config{AutoNext: true})
+	p.SetConfig(store.Config{AutoNext: true, Autoplay: true})
+	if !p.prefetched {
+		t.Fatal("looked ahead again with something already lined up")
+	}
+}
+
+func TestQueueAfterFailedLoadPlays(t *testing.T) {
+	p := New(store.Config{})
+	var started []PlayRequest
+	p.start = func(req PlayRequest) { started = append(started, req) }
+	playing(p, episode("failshow", "failshow:1:1"))
+	p.onEndFile("error")
+	if !p.Queue(PlayRequest{VideoID: "failshow:1:1", URL: "another"}) || len(started) != 1 {
+		t.Fatal("n after a failed load waited behind nothing")
+	}
+}
+
+// Skipping the outro jumps to the end from the last quarter, and the file
+// ends before the position is read again. A seek earlier on, or no seek,
+// followed by the end is still stopping early.
+func TestSkipOutroCountsAsWatched(t *testing.T) {
+	for _, c := range []struct {
+		pos    float64 // the last position read, of 1440
+		seeked bool
+		early  bool
+	}{{1224, true, false}, {600, true, true}, {1224, false, true}} {
+		p := New(store.Config{})
+		var early bool
+		p.sink = func(msg tea.Msg) {
+			if e, ok := msg.(ErrMsg); ok && strings.Contains(e.Err.Error(), "stopped early") {
+				early = true
+			}
+		}
+		playing(p, episode("outroshow", fmt.Sprintf("outroshow:%v:%v", c.pos, c.seeked)))
+		p.state.Duration, p.state.Pos = 1440, c.pos
+		if c.seeked {
+			p.dispatch(map[string]any{"event": "seek"})
+		}
+		p.onEndFile("eof")
+		if early != c.early {
+			t.Errorf("at %v, seeked %v: stopped early %v", c.pos, c.seeked, early)
 		}
 	}
 }

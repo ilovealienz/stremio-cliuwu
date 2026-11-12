@@ -609,6 +609,10 @@ func (s *settingsScreen) rebuild() {
 			ctx.cfg.CachedFirst = !ctx.cfg.CachedFirst
 			return s.save()
 		}},
+		{label: "retry failed streams", sub: "open a stream once more if it fails to load", badge: onOff(c.RetryLoads), act: func() tea.Cmd {
+			ctx.cfg.RetryLoads = !ctx.cfg.RetryLoads
+			return s.save()
+		}},
 		{label: "blocked terms", sub: "hide streams matching these",
 			badge: blockedBadge(c.Blocked), act: func() tea.Cmd {
 				return s.prompt("blocked terms", "ai upscale, cam, telesync",

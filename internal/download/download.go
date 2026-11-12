@@ -123,6 +123,13 @@ type partInfo struct {
 	Done int64  `json:"done,omitempty"`
 }
 
+// Some hosts answer an expired link with a 200 and an error page.
+var errWebPage = errors.New("the server sent a web page, not a video — the link may have expired, press R on the stream list to refetch")
+
+func isPage(res *http.Response) bool {
+	return strings.HasPrefix(strings.ToLower(res.Header.Get("Content-Type")), "text/html")
+}
+
 func partPath(final string) string { return final + ".part" }
 
 func infoPath(final string) string { return final + ".part.json" }
@@ -844,9 +851,8 @@ func (d *Downloader) fetch(dl *Download) error {
 		return fmt.Errorf("server said %s", res.Status)
 	}
 
-	// Some hosts answer an expired link with a 200 and an error page.
-	if ct := strings.ToLower(res.Header.Get("Content-Type")); strings.HasPrefix(ct, "text/html") {
-		return errors.New("the server sent a web page, not a video — the link may have expired, press R on the stream list to refetch")
+	if isPage(res) {
+		return errWebPage
 	}
 
 	// ContentLength is -1 when the server doesn't say. Carrying that through

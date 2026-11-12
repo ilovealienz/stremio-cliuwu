@@ -150,10 +150,10 @@ func TestRemoveWhileActiveLeavesNothing(t *testing.T) {
 		w.Write(make([]byte, 1048576))
 	}))
 	defer srv.Close()
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	freshState(t)
 
-	d := New()
 	path := filepath.Join(t.TempDir(), "ep.mkv")
+	d := testDownloader(t)
 	d.Add("ep", srv.URL+"/ep.mkv", path)
 	for i := 0; i < 200; i++ {
 		if _, err := os.Stat(infoPath(path)); err == nil {
@@ -209,7 +209,7 @@ func TestResumeUnknownID(t *testing.T) {
 }
 
 func TestScanLeavesRunningSidecar(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	freshState(t)
 	dir := t.TempDir()
 	path := filepath.Join(dir, "ep.mkv")
 	writePartInfo(path, partInfo{URL: "http://x/ep.mkv", Total: 10})

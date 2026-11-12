@@ -1,5 +1,7 @@
 BINARY  = stremio-cliuwu
-VERSION ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null))
+# The tag on a tagged commit, otherwise the newest release plus -dev-<commit>
+# (release tags are on main, outside the working branch's history).
+VERSION ?= $(patsubst v%,%,$(shell git describe --tags --exact-match --dirty 2>/dev/null || { t=$$(git describe --tags $$(git rev-list --tags --max-count=1) 2>/dev/null) && echo "$$t-dev-$$(git rev-parse --short HEAD)$$(git diff --quiet HEAD || echo -dirty)"; }))
 ifeq ($(VERSION),)
 VERSION = dev
 endif

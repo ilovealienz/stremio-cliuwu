@@ -75,6 +75,8 @@ func probe(ctx context.Context, link string) (final, name string, size int64, ra
 			return "", "", 0, false, fmt.Errorf("%s — the link may have expired, press R on the stream list to refetch", res.Status)
 		case res.StatusCode >= 400:
 			return "", "", 0, false, fmt.Errorf("server said %s", res.Status)
+		case isPage(res):
+			return "", "", 0, false, errWebPage
 		}
 
 		size = res.ContentLength

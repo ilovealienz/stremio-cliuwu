@@ -104,7 +104,11 @@ func WriteAtomic(path string, b []byte, perm os.FileMode) error {
 		os.Remove(name)
 		return err
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, path); err != nil {
+		os.Remove(name) // Windows can refuse while something holds the file
+		return err
+	}
+	return nil
 }
 
 func readJSON(path string, v any) error {

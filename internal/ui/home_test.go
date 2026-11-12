@@ -10,6 +10,7 @@ import (
 	"stremio-cliuwu/internal/download"
 	"stremio-cliuwu/internal/player"
 	"stremio-cliuwu/internal/store"
+	"stremio-cliuwu/internal/stremio"
 )
 
 func TestResumeRowRefitsWhenPanelToggles(t *testing.T) {
@@ -38,4 +39,15 @@ func TestResumeRowRefitsWhenPanelToggles(t *testing.T) {
 			}
 		}
 	}
+}
+
+// The manifests arrive while the panel's first fetch is running. The fetch
+// reads the addons it started with.
+func TestPanelFetchWhileAddonsArrive(t *testing.T) {
+	smokeApp(t, 80, 24)
+	done := make(chan struct{})
+	cmd := FetchTargetInfo(store.HistoryEntry{ID: "tt100", Type: "movie", Name: "A Film"})
+	go func() { cmd(); close(done) }()
+	ctx.addons = append([]stremio.Addon(nil), ctx.addons...)
+	<-done
 }

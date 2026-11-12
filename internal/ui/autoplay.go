@@ -2,6 +2,7 @@ package ui
 
 import (
 	"math"
+	"strconv"
 	"strings"
 	"time"
 
@@ -18,7 +19,7 @@ type autoPickMsg struct {
 	prev   player.PlayRequest
 	target store.StreamTarget
 	pick   stremio.Stream
-	ok     bool
+	why    string // no pick because of this; "" when there is one
 }
 
 // autoFetch loads the streams for the episode after prev, retrying like the
@@ -42,8 +43,8 @@ func autoFetch(prev player.PlayRequest, patient bool) tea.Cmd {
 			time.Sleep(d)
 			streams, failed = stremio.RetryStreams(addons, t.MediaType, t.FetchID())
 		}
-		st, ok := pickStream(streams, prev, cfg)
-		return autoPickMsg{prev: prev, target: t, pick: st, ok: ok}
+		st, why := pickWhy(streams, prev, cfg)
+		return autoPickMsg{prev: prev, target: t, pick: st, why: why}
 	}
 }
 
@@ -60,8 +61,9 @@ func hasPlayable(streams []stremio.Stream) bool {
 // addon tab and filter narrow the list first; a tab or filter that matches
 // nothing means no pick, so the list opens.
 //
-// The rest follows Sonarr: candidates are the streams at least as cached as
-// the top stream, those sharing prev's bingeGroup first.
+// A stream flagged not cached is never picked. The rest follows Sonarr:
+// candidates are the streams at least as cached as the top stream, those
+// sharing prev's bingeGroup first.
 // Releases that name another episode, or are a special or a batch when prev
 // wasn't, are dropped. The rest are compared field by field in order
 // (variant and language, the same show, the same title words, resolution,
@@ -70,6 +72,12 @@ func hasPlayable(streams []stremio.Stream) bool {
 // nearer size, then list order. A different variant, like audio description, a dub or another
 // language, is never autoplayed.
 func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Config) (stremio.Stream, bool) {
+	st, why := pickWhy(streams, prev, cfg)
+	return st, why == ""
+}
+
+// pickWhy is pickStream with the reason there's no pick, "" when there is.
+func pickWhy(streams []stremio.Stream, prev player.PlayRequest, cfg store.Config) (stremio.Stream, string) {
 	var cands []stremio.Stream
 	for _, st := range streams {
 		if st.URL != "" && !stremio.StreamBlocked(st, cfg.Blocked) {
@@ -87,13 +95,22 @@ func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Con
 		}
 		cands = out
 	}
+	if len(cands) == 0 {
+		return stremio.Stream{}, "no streams"
+	}
 	if prev.AddonTab != "" {
 		keep(func(st stremio.Stream) bool { return st.Addon == prev.AddonTab })
+		if len(cands) == 0 {
+			return stremio.Stream{}, "nothing from " + prev.AddonTab
+		}
 	}
 	if q := strings.ToLower(strings.TrimSpace(prev.Filter)); q != "" {
 		keep(func(st stremio.Stream) bool {
 			return strings.Contains(strings.ToLower(stripANSI(FmtStream(st))), q)
 		})
+		if len(cands) == 0 {
+			return stremio.Stream{}, "nothing matches " + strconv.Quote(prev.Filter)
+		}
 	}
 	// Addons sometimes answer with other episodes: another week of a daily
 	// show, or a mislabelled file. A name that says which episode it is
@@ -102,7 +119,7 @@ func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Con
 	if nq, ok := prev.Queue.Next(cfg.NextSeason); ok {
 		v, was := nq.Episodes[nq.Index], prev.Queue.Episodes[prev.Queue.Index]
 		nextTitle = v.Title
-		aired, _ := time.Parse(time.RFC3339, v.Released)
+		aired, _ := stremio.ParseRelease(v.Released) // OMDb sends a plain date
 		extra := stremio.Extra(prev.Release)
 		file := stremio.NamesFile(prev.Release)
 		keep(func(st stremio.Stream) bool {
@@ -114,7 +131,13 @@ func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Con
 		})
 	}
 	if len(cands) == 0 {
-		return stremio.Stream{}, false
+		return stremio.Stream{}, "only other episodes or batches"
+	}
+	// One flagged not cached plays the addon's "downloading" clip instead.
+	all := cands
+	keep(func(st stremio.Stream) bool { return stremio.StreamCached(st) >= 0 })
+	if len(cands) == 0 {
+		return stremio.Stream{}, "your version isn't cached yet"
 	}
 
 	var group []stremio.Stream
@@ -138,9 +161,9 @@ func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Con
 	group = group[:n]
 	if prev.Release == "" {
 		if len(group) > 0 {
-			return group[0], true
+			return group[0], ""
 		}
-		return cands[0], true
+		return cands[0], ""
 	}
 
 	// Episode titles are part of release names; they mustn't read as tags.
@@ -201,10 +224,18 @@ func pickStream(streams []stremio.Stream, prev player.PlayRequest, cfg store.Con
 	// rest of the list may still have the right one.
 	if len(group) > 0 {
 		if st, ok := pick(group); ok {
-			return st, true
+			return st, ""
 		}
 	}
-	return pick(cands)
+	if st, ok := pick(cands); ok {
+		return st, ""
+	}
+	for _, st := range all {
+		if key(st)[0] {
+			return stremio.Stream{}, "your version isn't cached yet"
+		}
+	}
+	return stremio.Stream{}, "only other versions"
 }
 
 // epTitle is the title of the episode delta away in q, or "".
@@ -275,8 +306,8 @@ func (a *app) autoPicked(m autoPickMsg) tea.Cmd {
 	if !ctx.cfg.Autoplay {
 		return nil // turned off while the streams loaded
 	}
-	if !m.ok {
-		return a.advanceTo(m.prev, "next up — ")
+	if m.why != "" {
+		return a.advanceTo(m.prev, "autoplay: "+m.why+" — next up ")
 	}
 	req := playRequest(m.target, m.pick, 0)
 	req.Filter, req.AddonTab = m.prev.Filter, m.prev.AddonTab

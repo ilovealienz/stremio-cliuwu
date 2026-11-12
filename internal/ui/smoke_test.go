@@ -3,21 +3,27 @@ package ui
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"stremio-cliuwu/internal/download"
 	"stremio-cliuwu/internal/player"
 	"stremio-cliuwu/internal/store"
 	"stremio-cliuwu/internal/stremio"
 )
+
+// smokeExtraName is a second film's name, for odd text.
+var smokeExtraName string
 
 // smokeMedia serves the library's files, for downloads.
 var smokeMedia string
@@ -35,6 +41,7 @@ func (smokeAddons) RoundTrip(r *http.Request) (*http.Response, error) {
 		send(map[string]any{"metas": []any{
 			map[string]any{"id": "tt100", "type": "movie", "name": "A Film With A Very Long Title That Will Not Fit Anywhere At All", "releaseInfo": "2020"},
 			map[string]any{"id": "tt101", "type": "movie", "name": "Short", "releaseInfo": "1999"},
+			map[string]any{"id": "tt102", "type": "movie", "name": smokeExtraName + "x", "releaseInfo": "2001"},
 		}})
 	case strings.HasPrefix(p, "/catalog/series/"):
 		send(map[string]any{"metas": []any{map[string]any{"id": "tt200", "type": "series", "name": "A Show", "releaseInfo": "2018–"}}})
@@ -58,6 +65,8 @@ func (smokeAddons) RoundTrip(r *http.Request) (*http.Response, error) {
 		for i, sp := range []struct{ kitsu, title string }{{"11", "Recap Part 1"}, {"11", "Recap Part 2"}, {"12", "The Movie"}} {
 			vids = append(vids, map[string]any{"id": fmt.Sprintf("kitsu:%s:%d", sp.kitsu, i+1), "season": 0, "episode": i + 1, "title": sp.title, "kitsu_id": sp.kitsu})
 		}
+		// A film with no kitsu entry of its own.
+		vids = append(vids, map[string]any{"id": "kitsu:1:0:4", "season": 0, "episode": 4, "title": "The Untagged Film"})
 		send(map[string]any{"meta": map[string]any{"id": "kitsu:1", "name": "An Anime", "videos": vids}})
 	case strings.HasPrefix(p, "/catalog/other/"):
 		send(map[string]any{"metas": []any{map[string]any{"id": "lib1", "type": "other", "name": "A Pack"}}})
@@ -520,4 +529,163 @@ func TestSmokeStreamActions(t *testing.T) {
 	r.waitView("from 05:00?")
 	r.keys("n")
 	r.waitView("couldn't start mpv")
+}
+
+// Addon text in other scripts and with emoji, or trying to send escape codes:
+// every line fits both the way the app measures it and the way a terminal
+// that sizes one code point at a time draws it, and only colours get through.
+func TestSmokeOddText(t *testing.T) {
+	names := [][2]string{ // the title, and a word that shows it's on screen
+		{"進撃の巨人 The Final Season 完結編 前編", "進撃"},
+		{"\U0001f468\u200d\U0001f469\u200d\U0001f467\u200d\U0001f466 Family Night \U0001f3f3️\u200d\U0001f308 \U0001f44d\U0001f3fd", "Fami"},
+		{"\U0001f1ec\U0001f1e7\U0001f1ef\U0001f1f5 Dual ⚙️ \U0001f4be \U0001f464", "Dual"},
+		{"Pokémon ภาษาไทย 한국어 مسلسل ｶﾀｶﾅ", "Poke"},
+		{"Evil\x1b]52;c;aGk=\x07Film\x1b[2J\x1b]0;pwned\x07 \u202eTXT.exe", "Evil"},
+	}
+	perPoint := func(s string) int {
+		w := 0
+		for _, r := range ansi.Strip(s) {
+			if r >= 0x1f1e6 && r <= 0x1f1ff {
+				w++ // half a flag: one column on its own
+				continue
+			}
+			w += ansi.StringWidth(string(r))
+		}
+		return w
+	}
+	colours := regexp.MustCompile("\x1b\\[[0-9;:]*m")
+	t.Cleanup(func() { smokeExtraName = "" })
+	for _, size := range [][2]int{{120, 30}, {60, 20}, {30, 8}} {
+		for _, n := range names {
+			name := n[0]
+			smokeExtraName = name
+			stremio.ClearCaches()
+			r := smokeApp(t, size[0], size[1])
+			r.keys("m")
+			r.waitView("A Film") // the first row, on every size
+			seen := false
+			for _, k := range []string{"", "down", "down", "i", "enter"} {
+				if k != "" {
+					r.keys(k)
+					r.settle()
+				}
+				v := r.view()
+				seen = seen || strings.Contains(ansi.Strip(v), n[1])
+				if rest := colours.ReplaceAllString(v, ""); strings.ContainsAny(rest, "\x1b\x07\u202e") {
+					t.Fatalf("%q let a control through after %q: %q", name, k, rest)
+				}
+				for i, l := range strings.Split(v, "\n") {
+					if aw, pw := ansi.StringWidth(l), perPoint(l); aw > size[0] || pw > size[0] {
+						t.Errorf("%dx%d %q after %q, line %d: %d / %d wide: %q", size[0], size[1], name, k, i, aw, pw, ansi.Strip(l))
+					}
+				}
+			}
+			if !seen {
+				t.Errorf("%dx%d: %q never showed", size[0], size[1], name)
+			}
+		}
+	}
+}
+
+// The subtitle screen works on its own copy of the stream's subtitles.
+func TestSubsScreenCopiesShipped(t *testing.T) {
+	shipped := []stremio.Subtitle{{URL: "http://x/s.srt", Lang: "eng", Addon: "mine"}}
+	newSubsScreen("A Film", stremio.SubsQuery{}, shipped)
+	if shipped[0].Addon != "mine" {
+		t.Fatal("changed the playing request's subtitles")
+	}
+}
+
+type offline struct{}
+
+func (offline) RoundTrip(r *http.Request) (*http.Response, error) {
+	return nil, &net.DNSError{Err: "no such host", Name: r.URL.Hostname(), IsNotFound: true}
+}
+
+type slow struct{ release chan struct{} }
+
+func (s slow) RoundTrip(r *http.Request) (*http.Response, error) {
+	select {
+	case <-s.release:
+	case <-r.Context().Done():
+		return nil, r.Context().Err()
+	}
+	return smokeAddons{}.RoundTrip(r)
+}
+
+// With no network every screen says it couldn't load, rather than looking
+// empty, and a stream list says how many addons failed. With an addon that's
+// slow, esc still works while it's loading.
+func TestSmokeOfflineAndSlow(t *testing.T) {
+	r := smokeApp(t, 100, 24)
+	stremio.ClearCaches()
+	r.keys("m")
+	r.waitView("Short")
+	stremio.HTTPClient.Transport = offline{}
+	saved := streamRetryDelays
+	streamRetryDelays = []time.Duration{time.Millisecond}
+	defer func() { streamRetryDelays = saved }()
+	r.keys("down", "enter")
+	r.waitView("1 addon failed — R asks again")
+	r.keys("esc", "esc")
+
+	stremio.ClearCaches()
+	for _, k := range []string{"m", "d"} {
+		r.keys(k)
+		r.waitView("couldn't load — can't find smoke.test")
+		r.keys("esc")
+	}
+	r.keys("/", "x", "y", "enter")
+	r.waitView("couldn't search — can't find smoke.test")
+	r.keys("esc")
+
+	release := make(chan struct{})
+	defer close(release)
+	stremio.ClearCaches()
+	stremio.HTTPClient.Transport = slow{release}
+	r.keys("m")
+	r.waitView("Films")
+	r.keys("esc")
+	if !strings.Contains(ansi.Strip(r.view()), "browse") {
+		t.Fatal("esc didn't leave a catalog that was still loading")
+	}
+}
+
+// Specials with no kitsu entry are under "other specials", an episode list
+// of just those.
+func TestSmokeUntaggedSpecial(t *testing.T) {
+	r := smokeApp(t, 120, 30)
+	r.keys("a")
+	r.waitView("Anime By Genre")
+	r.keys("enter")
+	r.waitView("An Anime")
+	r.keys("enter")
+	r.waitView("specials")
+	r.keys("enter")
+	r.waitView("other specials")
+	r.keys("down", "down", "enter")
+	r.waitView("The Untagged Film")
+	if strings.Contains(ansi.Strip(r.view()), "Recap Part 1") {
+		t.Fatalf("a collection's episode in other specials:\n%s", ansi.Strip(r.view()))
+	}
+	r.keys("enter")
+	r.waitView("1080P")
+	r.keys("esc")
+	r.waitView("The Untagged Film")
+
+	// Its number may not be the one releases use, so it can be searched by
+	// name instead.
+	r.keys("?")
+	r.waitView("find this special as its own title")
+	r.keys("esc", "s")
+	r.waitView(`"The Untagged Film" across`)
+	r.keys("esc", "esc", "esc")
+	r.waitView("season 1")
+	r.keys("down", "enter")
+	r.waitView("Anime Ep 1")
+	r.keys("s")
+	r.settle()
+	if strings.Contains(ansi.Strip(r.view()), "search") {
+		t.Fatalf("s searched from a plain episode list:\n%s", ansi.Strip(r.view()))
+	}
 }

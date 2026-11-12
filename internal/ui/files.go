@@ -38,53 +38,6 @@ func (v FileVideo) URL() string {
 	return v.Streams[0].URL
 }
 
-// QueueEntry downloads every file in a library entry.
-//
-// Offered from the catalog list as well as from inside an entry: a library
-// row is usually one whole pack, and having to open it just to press A is a
-// step for nothing. Runs off the UI goroutine — it fetches before queueing.
-func QueueEntry(m stremio.Meta) (string, bool) {
-	if ctx.cfg.DownloadDir == "" {
-		return "set a download location in settings first", false
-	}
-
-	videos, err := FetchFiles(m)
-	if err != nil {
-		return err.Error(), false
-	}
-	if len(videos) == 0 {
-		return "no files in " + m.Name, false
-	}
-
-	// Same trimming the file list does, so a download started from either
-	// place lands in the same layout.
-	paths := make([]string, len(videos))
-	for i, v := range videos {
-		paths[i] = strings.TrimPrefix(v.Title, "/")
-	}
-	prefix := commonDirPrefix(paths)
-
-	queued := 0
-	for i, v := range videos {
-		if v.URL() == "" {
-			continue
-		}
-		rel := strings.TrimPrefix(paths[i], prefix)
-		path := download.LibraryPath(ctx.cfg.DownloadDir, m.Name, rel)
-		if _, ok := ctx.downloader.Add(download.BaseName(rel), v.URL(), path); ok {
-			queued++
-		}
-	}
-
-	switch {
-	case queued == 0:
-		return "nothing new to queue", false
-	case queued == 1:
-		return "queued 1 file", true
-	}
-	return fmt.Sprintf("queued %d files", queued), true
-}
-
 // FetchFiles pulls the file list for one catalog item.
 func FetchFiles(m stremio.Meta) ([]FileVideo, error) {
 	base := m.Base
@@ -267,6 +220,7 @@ func (s *fileListScreen) request(idx int) player.PlayRequest {
 		MediaType: "other",
 		Label:     file,
 		URL:       v.URL(),
+		Retry:     true, // in your debrid library, so it's cached
 		Entry: store.HistoryEntry{
 			Name: name, ID: s.meta.ID, Type: "other",
 			Source: s.meta.Source, Year: s.meta.Year, Base: s.meta.Base,
@@ -467,6 +421,8 @@ func (s *fileListScreen) Update(msg tea.Msg) (screen, tea.Cmd) {
 		s.busy.stop()
 		s.loaded = true
 		if m.err != nil {
+			s.list.Empty = "couldn't load — " + m.err.Error()
+			s.rebuild()
 			return s, toastErr(m.err.Error())
 		}
 		s.videos = m.videos

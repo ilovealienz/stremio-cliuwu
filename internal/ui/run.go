@@ -158,7 +158,9 @@ func Run(opts Options) {
 	go func() {
 		<-sigs
 		cleanup()
-		os.Exit(130)
+		prog.Quit() // the normal way out puts the terminal back
+		time.Sleep(2 * time.Second)
+		os.Exit(130) // stuck: leave anyway
 	}()
 
 	if _, err := prog.Run(); err != nil {

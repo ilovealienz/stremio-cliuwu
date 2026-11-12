@@ -13,7 +13,7 @@ import (
 )
 
 func TestFetchEdgeCases(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	freshState(t)
 	body := bytes.Repeat([]byte("v"), 1000)
 	var hits atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,7 +80,7 @@ func TestFetchEdgeCases(t *testing.T) {
 
 // A server that never sends a size: the finished download still has one.
 func TestFetchUnknownSize(t *testing.T) {
-	t.Setenv("XDG_STATE_HOME", t.TempDir())
+	freshState(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write(bytes.Repeat([]byte("v"), 3000))
 		w.(http.Flusher).Flush() // chunked, so no Content-Length

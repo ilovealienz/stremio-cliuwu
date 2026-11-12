@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // listModel is the one list widget the whole TUI uses. Screens call Update
@@ -465,10 +466,7 @@ func (l *listModel) View() string {
 // too quiet to tell you the app was listening.
 func (l *listModel) jumpLine() string {
 	label, _ := l.SelectedItem()
-	target := stripANSI(label.Label)
-	if r := []rune(target); len(r) > 40 {
-		target = string(r[:40]) + "…"
-	}
+	target := ansi.Truncate(stripANSI(label.Label), 40, "…")
 	return stKey.Render("go to #") + stCursor.Render(l.numBuf+"▌") +
 		stHint.Render("   "+target) +
 		stHint.Render("   enter=play  esc=cancel")

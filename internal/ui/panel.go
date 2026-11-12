@@ -155,6 +155,7 @@ func (p *continuePanel) NextEntry() (store.HistoryEntry, bool) {
 // the title — so this is the one thing on the panel that needs the network.
 // Both underlying calls cache, so it's one request per title per session.
 func FetchTargetInfo(e store.HistoryEntry) tea.Cmd {
+	addons := ctx.addons
 	return func() tea.Msg {
 		if e.ID == "" {
 			return targetInfoMsg{}
@@ -162,7 +163,7 @@ func FetchTargetInfo(e store.HistoryEntry) tea.Cmd {
 
 		// A film has no episode to look up; it's the meta object itself.
 		if isFilm(e) {
-			d, ok := stremio.GetMetaDetail(ctx.addons, "movie", e.ID, "")
+			d, ok := stremio.GetMetaDetail(addons, "movie", e.ID, "")
 			if !ok {
 				return targetInfoMsg{}
 			}
@@ -170,7 +171,7 @@ func FetchTargetInfo(e store.HistoryEntry) tea.Cmd {
 		}
 
 		m := stremio.Meta{ID: e.ID, Type: e.Type, Name: e.Name, Source: e.Source, Base: e.Base}
-		for _, v := range stremio.GetSeriesMeta(ctx.addons, m).Videos {
+		for _, v := range stremio.GetSeriesMeta(addons, m).Videos {
 			if v.ID == e.VideoID || (v.Season == e.Season && v.Episode == e.Episode) {
 				return targetInfoMsg{Key: targetKey(e), Video: v}
 			}

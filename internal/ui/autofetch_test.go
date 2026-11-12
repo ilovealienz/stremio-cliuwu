@@ -64,7 +64,7 @@ func TestAutoFetchPatientRetriesFailedAddons(t *testing.T) {
 		ctx = &appCtx{cfg: &store.Config{}, player: player.New(store.Config{}),
 			addons: []stremio.Addon{addon("flaky.test"), addon("good.test")}}
 		m := autoFetch(prev, c.patient)().(autoPickMsg)
-		if !m.ok || m.pick.Addon != c.want {
+		if m.why != "" || m.pick.Addon != c.want {
 			t.Errorf("patient=%v: picked %q from %q, want %q", c.patient, m.pick.Name, m.pick.Addon, c.want)
 		}
 	}
@@ -88,7 +88,7 @@ func TestAutoFetchCrossesSeasonsWhenOn(t *testing.T) {
 			t.Fatalf("cross=%v: fetch started %v", cross, cmd != nil)
 		}
 		if cross {
-			if m := cmd().(autoPickMsg); !m.ok || m.target.VideoID != "tt8:2:1" {
+			if m := cmd().(autoPickMsg); m.why != "" || m.target.VideoID != "tt8:2:1" {
 				t.Errorf("picked %q for %q", m.pick.Name, m.target.VideoID)
 			}
 		}
