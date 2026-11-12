@@ -767,7 +767,7 @@ func (d *Downloader) fetch(dl *Download) error {
 	if err := os.MkdirAll(filepath.Dir(dl.Path), 0755); err != nil {
 		return err
 	}
-	if store.CfgNow().Aria2 {
+	if store.CfgNow().Aria2 && aria2Fits(dl.Path) {
 		bin, err := aria2Path()
 		if err != nil {
 			return err

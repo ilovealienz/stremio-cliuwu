@@ -3,6 +3,7 @@ package poster
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -30,6 +31,9 @@ func TestKittyDetect(t *testing.T) {
 		{"plain xterm", map[string]string{"TERM": "xterm-256color"}, "", false},
 	}
 	for _, c := range cases {
+		if c.tmux != "" && runtime.GOOS == "windows" {
+			continue // the fake tmux is a shell script, and there's no tmux on Windows
+		}
 		for _, k := range []string{"TMUX", "TERM", "TERM_PROGRAM", "KITTY_WINDOW_ID", "SSH_TTY", "SSH_CONNECTION"} {
 			t.Setenv(k, c.env[k])
 		}

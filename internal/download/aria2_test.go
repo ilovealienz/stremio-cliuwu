@@ -308,7 +308,7 @@ func TestAria2Names(t *testing.T) {
 		fs := newFileServer(t)
 		d.Add("ep", fs.URL+"/files/ep.mkv", path)
 		stopAt(t, d, 0.2)
-		if _, err := os.Stat(controlPath(path)); err != nil {
+		if _, err := os.Stat(controlPath(path)); err != nil && aria2Fits(path) {
 			t.Errorf("%d-byte name: no resume file", len(name))
 			continue
 		}
@@ -316,4 +316,21 @@ func TestAria2Names(t *testing.T) {
 		waitFor(t, "done", func() bool { return only(d).State == Done || only(d).State == Failed })
 		sameBytes(t, path, fs.files["ep.mkv"])
 	}
+}
+
+// A path too long for aria2c (Windows' MAX_PATH) downloads the built-in way.
+func TestAria2PathTooLong(t *testing.T) {
+	d, path := aria2Setup(t)
+	saved := aria2MaxPath
+	aria2MaxPath = len(path) // shorter than the path and its partial files
+	t.Cleanup(func() { aria2MaxPath = saved })
+
+	fs := newFileServer(t)
+	d.Add("ep", fs.URL+"/files/ep.mkv", path)
+	waitFor(t, "progress", func() bool { dl := only(d); return dl.State == Active && dl.Frac() > 0.1 })
+	if _, err := os.Stat(controlPath(path)); err == nil {
+		t.Fatal("aria2c used for a path it can't write")
+	}
+	waitFor(t, "done", func() bool { return only(d).State == Done || only(d).State == Failed })
+	sameBytes(t, path, fs.files["ep.mkv"])
 }

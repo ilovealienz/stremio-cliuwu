@@ -15,9 +15,11 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf16"
 )
 
 // aria2Conns is the connections per file. TorBox asks for 4 or less.
@@ -92,6 +94,27 @@ func probe(ctx context.Context, link string) (final, name string, size int64, ra
 		return link, name, size, res.StatusCode == http.StatusPartialContent, nil
 	}
 	return "", "", 0, false, errors.New("too many redirects")
+}
+
+// aria2MaxPath is the longest path aria2c can write: MAX_PATH on Windows,
+// no limit elsewhere. Go handles longer ones, so past it the built-in
+// download is used.
+var aria2MaxPath = func() int {
+	if runtime.GOOS == "windows" {
+		return 259
+	}
+	return 0
+}()
+
+// aria2Fits reports whether aria2c can write a download's files.
+func aria2Fits(path string) bool {
+	if aria2MaxPath == 0 {
+		return true
+	}
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	return len(utf16.Encode([]rune(path)))+partRoom <= aria2MaxPath
 }
 
 // aria2Proc is one running aria2c, its RPC endpoint and its one download.
